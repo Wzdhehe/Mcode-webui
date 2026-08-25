@@ -286,7 +286,7 @@ export async function handleRequest(req, res) {
 
   // Gate 2: LAN reject (only for non-local requests; /api/settings is the exception that lets users turn LAN back on)
   if (!local && !getLanBroadcast()) {
-    if (rejectLan(res, pathname, req.socket.remoteAddress)) return;
+    if (rejectLan(res, pathname, req.socket.remoteAddress, req.headers["accept-language"])) return;
   }
 
   // Gate 3: token auth (v1.0.1).

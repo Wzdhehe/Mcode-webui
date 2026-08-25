@@ -100,10 +100,10 @@ describe("settings — rejectLan", () => {
     assert.match(body.error, /LAN/);
   });
 
-  test("returns true and writes HTML 403 for non-API paths (browser request)", () => {
+  test("returns true and writes HTML 403 for non-API paths (browser request, zh)", () => {
     settings.setLanBroadcast(false);
     const res = fakeRes();
-    const rejected = settings.rejectLan(res, "/", "192.168.1.100");
+    const rejected = settings.rejectLan(res, "/", "192.168.1.100", "zh-CN,zh;q=0.9,en;q=0.8");
     assert.equal(rejected, true);
     assert.equal(res._status, 403);
     assert.ok(res._isHtml, "non-API path should return HTML");
@@ -111,11 +111,21 @@ describe("settings — rejectLan", () => {
     assert.match(res._body, /192\.168\.1\.100/); // remote IP embedded in the page
   });
 
-  test("HTML page mentions /api/settings as the toggle path", () => {
+  test("returns English HTML when Accept-Language is English", () => {
     settings.setLanBroadcast(false);
     const res = fakeRes();
-    settings.rejectLan(res, "/some/page", "10.0.0.1");
-    assert.match(res._body, /127\.0\.0\.1:7890/);
+    settings.rejectLan(res, "/", "192.168.1.100", "en-US,en;q=0.9");
+    assert.match(res._body, /LAN access disabled/);
+    assert.match(res._body, /192\.168\.1\.100/);
+  });
+
+  test("HTML page mentions dynamic PORT (not hardcoded 7890)", () => {
+    settings.setLanBroadcast(false);
+    const res = fakeRes();
+    settings.rejectLan(res, "/some/page", "10.0.0.1", "en-US,en;q=0.9");
+    // v1.0.1: was hardcoded 7890 — now uses dynamic PORT (default 8080)
+    assert.match(res._body, /127\.0\.0\.1:8080/);
+    assert.doesNotMatch(res._body, /7890/);
   });
 });
 
