@@ -3,19 +3,17 @@
 //
 // Order of gates (top-to-bottom):
 //   1. CORS headers (always)
-//   2. Interface allowlist check (per-connection localAddress)
-//   3. LAN reject (non-local + LAN off)
-//   4. Token auth (non-local + token enabled + token set)
-//   5. Read-only gate (non-local + readOnly + non-GET/OPTIONS)
-//   6. Route dispatch
+//   2. LAN reject (non-local + LAN off)
+//   3. Token auth (non-local + token enabled + token set)
+//   4. Read-only gate (non-local + readOnly + non-GET/OPTIONS)
+//   5. Route dispatch
 //
-// Local requests (loopback + this host's LAN_IP) bypass all of (2)(3)(4)(5).
-// `/api/settings` is exempted from (3) so users can flip the LAN switch
+// Local requests (loopback + this host's LAN_IP) bypass (2)(3)(4).
+// `/api/settings` is exempted from (2) so users can flip the LAN switch
 // back on from a remote device.
 
-import { isLocalRequest, isInterfaceAllowed } from "./lib/lan.js";
+import { isLocalRequest } from "./lib/lan.js";
 import {
-  getAllowedInterfaces,
   getLanBroadcast,
   getReadOnly,
   rejectLan,
@@ -36,29 +34,6 @@ import * as modelRoute from "./routes/model.js";
 import * as debugRoute from "./routes/debug.js";
 // v0.5.by: mcode acp 协议 RPC 路由 (set_mode / set_config_option / cancel / load / activate)
 import * as protocolRoute from "./routes/protocol.js";
-
-function rejectInterface(res, pathname, localAddr) {
-  const isApi = pathname.startsWith("/api/");
-  // Always allow /api/settings so the user can flip the switch back
-  if (pathname === "/api/settings") return false;
-  if (isApi) {
-    res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({
-      ok: false,
-      error: "network interface not allowed (check settings card)",
-    }));
-    return true;
-  }
-  res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
-  res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>webui — interface blocked</title></head>
-<body style="font-family:sans-serif;max-width:560px;margin:80px auto;padding:24px;">
-<h1>🚫 Network interface blocked</h1>
-<p>You are connecting through an interface that is not in the allowlist.</p>
-<p>Local address: <code>${localAddr || "?"}</code></p>
-<p>Open <a href="http://127.0.0.1:8080/">http://127.0.0.1:8080/</a> on the host machine and adjust the LAN card → "Allowed interfaces" section.</p>
-</body></html>`);
-  return true;
-}
 
 function rejectReadOnly(res, _pathname) {
   if (!res.headersSent) {
@@ -308,18 +283,6 @@ export async function handleRequest(req, res) {
   const pathname = (req.url || "/").split("?")[0];
   const cid = getCidFromReq(req);
   const local = isLocalRequest(req);
-
-  // Gate 1: interface allowlist (v1.0.1)
-  //   - Empty allowlist = allow all (back-compat with v0.5.ao)
-  //   - Local requests always bypass (the user can edit settings locally)
-  if (!local) {
-    const ifaces = getAllowedInterfaces();
-    if (ifaces.length > 0) {
-      if (!isInterfaceAllowed(req.socket.localAddress, ifaces)) {
-        if (rejectInterface(res, pathname, req.socket.localAddress)) return;
-      }
-    }
-  }
 
   // Gate 2: LAN reject (only for non-local requests; /api/settings is the exception that lets users turn LAN back on)
   if (!local && !getLanBroadcast()) {

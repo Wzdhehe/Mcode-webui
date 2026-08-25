@@ -2870,15 +2870,34 @@ body.is-remote .btn-lan-toggle { display: none; }
    点开 #chip-lan 后展开；含只读/Token 鉴权/接口过滤等
    ============================================================ */
 .lan-card {
-  margin: 4px 8px 8px 8px;
-  padding: 12px 12px 14px 12px;
+  /* v1.0.1: popover 模式 — 浮在 sidebar 右边, 不挤压下方 GitHub 链接 */
+  position: fixed;
+  left: 248px;  /* left-panel 宽度 (240) + 8px gap */
+  bottom: 70px; /* 离底部 GitHub 链接留点空间 */
+  width: 320px;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+  padding: 12px 14px 14px 14px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-lg);
   font-size: 12.5px;
   color: var(--text);
-  /* 当 hidden 时不占空间 */
+  z-index: 100;
+}
+/* 小三角箭头指向 chip-lan (在卡片左下) */
+.lan-card::before {
+  content: "";
+  position: absolute;
+  left: -7px;
+  bottom: 24px;
+  width: 12px;
+  height: 12px;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  transform: rotate(45deg);
 }
 .lan-card[hidden] { display: none; }
 .lan-card-title {
@@ -2976,6 +2995,16 @@ body.is-remote .btn-lan-toggle { display: none; }
 .lan-card-token-value {
   color: var(--text);
 }
+.lan-card-token-placeholder {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  flex: 1;
+  text-align: left;
+}
 .lan-card-btn {
   font-size: 11.5px;
   padding: 4px 10px;
@@ -3023,42 +3052,6 @@ body.is-remote .btn-lan-toggle { display: none; }
   font-size: 10.5px;
   color: var(--text-tertiary);
   line-height: 1.4;
-}
-.lan-card-interfaces {
-  margin-top: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.lan-card-interface-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  padding: 4px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.lan-card-interface-item:hover { background: var(--bg-hover); }
-.lan-card-interface-item input { cursor: pointer; }
-.lan-card-interface-item-name { color: var(--text); font-weight: 500; }
-.lan-card-interface-item-addr {
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  margin-left: 4px;
-}
-.lan-card-no-interfaces {
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  font-style: italic;
-  padding: 4px 6px;
-}
-.lan-card-interface-status {
-  font-size: 11.5px;
-  color: var(--text-secondary);
-  padding: 2px 6px 4px 6px;
-  font-weight: 500;
 }
 /* chip-lan 展开态 — chevron 旋转提示 */
 .btn-lan-toggle[aria-expanded="true"] .btn-chevron { transform: rotate(90deg); }

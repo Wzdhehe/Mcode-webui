@@ -149,7 +149,6 @@ describe("handlePostSettings — v1.0.1 new fields", () => {
     settingsLib.setLanBroadcast(true);
     settingsLib.setReadOnly(false);
     settingsLib.setTokenEnabled(true);
-    settingsLib.setAllowedInterfaces([]);
     settingsLib.setTokenAcknowledged(false);
   });
 
@@ -186,36 +185,6 @@ describe("handlePostSettings — v1.0.1 new fields", () => {
     assert.equal(body.changed, true);
     assert.equal(body.tokenEnabled, false);
     assert.equal(settingsLib.getTokenEnabled(), false);
-  });
-
-  test("allowedInterfaces: known names are accepted", async () => {
-    // Get the real available interfaces (depends on host)
-    const lan = await import(absPath("lib/lan.js"));
-    const ifaces = lan.getAllNetworkInterfaces();
-    if (ifaces.length === 0) {
-      // Skip if no interfaces (sandboxed env)
-      return;
-    }
-    const names = ifaces.slice(0, 1).map((i) => i.name);
-    const res = fakeRes();
-    await settingsRoute.handlePostSettings(fakeReq({ allowedInterfaces: names }), res, {});
-    const body = JSON.parse(res._body);
-    assert.equal(body.changed, true);
-    assert.deepEqual(body.allowedInterfaces, names);
-    assert.deepEqual(settingsLib.getAllowedInterfaces(), names);
-  });
-
-  test("allowedInterfaces: unknown names are filtered out silently", async () => {
-    const res = fakeRes();
-    await settingsRoute.handlePostSettings(
-      fakeReq({ allowedInterfaces: ["NonExistent", "AlsoFake"] }),
-      res,
-      {},
-    );
-    // Empty (filtered) list matches current empty list → no change
-    const body = JSON.parse(res._body);
-    assert.equal(body.changed, false);
-    assert.deepEqual(settingsLib.getAllowedInterfaces(), []);
   });
 
   test("acknowledgeToken:true sets changed:true + persists", async () => {

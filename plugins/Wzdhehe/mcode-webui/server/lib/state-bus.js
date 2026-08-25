@@ -10,7 +10,6 @@ import {
   getMcodeSessionsStaleSync,
 } from "./acp-client.js";
 import {
-  getAllowedInterfaces,
   getCurrentToken,
   getLanBroadcast,
   getReadOnly,
@@ -147,7 +146,6 @@ function ensureMcodeSessionsFetchedAndPush(workspace) {
         currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
         tokenAcknowledged: getTokenAcknowledged(),
         tokenRotatedAt: getTokenRotatedAt(),
-        allowedInterfaces: [...getAllowedInterfaces()],
       };
       try {
         res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
@@ -193,7 +191,6 @@ export function pushStateFor(cid, opts = {}) {
         currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
         tokenAcknowledged: getTokenAcknowledged(),
         tokenRotatedAt: getTokenRotatedAt(),
-        allowedInterfaces: [...getAllowedInterfaces()],
       };
       try {
         res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
@@ -221,7 +218,6 @@ export function pushStateFor(cid, opts = {}) {
     currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
     tokenAcknowledged: getTokenAcknowledged(),
     tokenRotatedAt: getTokenRotatedAt(),
-    allowedInterfaces: [...getAllowedInterfaces()],
   };
   const payload = JSON.stringify(snapshot);
   const res = sseByCid.get(cid);
@@ -268,7 +264,6 @@ export function pushOnlineCount(lanBroadcast) {
       currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
       tokenAcknowledged: getTokenAcknowledged(),
       tokenRotatedAt: getTokenRotatedAt(),
-      allowedInterfaces: [...getAllowedInterfaces()],
     };
     try {
       res.write(`data: ${JSON.stringify(snapshot)}\n\n`);

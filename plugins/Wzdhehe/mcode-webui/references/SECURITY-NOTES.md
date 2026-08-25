@@ -199,7 +199,7 @@ log + a disabled feature) — it does not crash.
 ## 7. Testing & reproducibility
 
 - `npm test` runs `node --experimental-test-module-mocks --test test/*.test.js`.
-  384 passing tests, 1 skipped, 0 failing on a clean checkout.
+  371 passing tests, 1 skipped, 0 failing on a clean checkout.
 - `npm run lint` — ESLint flat config, 0 warnings on a clean checkout.
 - All tests use **temp file fixtures** (`mkdtempSync`). No test writes
   to the user's real `~/.minimax/` or `~/.mcode-webui/` directory unless
@@ -210,10 +210,10 @@ log + a disabled feature) — it does not crash.
 
 ---
 
-## 9. v1.0.1 — LAN sub-card: read-only / token auth / interface allowlist
+## 9. v1.0.1 — LAN sub-card: read-only / token auth
 
 v1.0.1 adds a secondary card under the `LAN access` chip in the bottom-left
-panel. It centralizes the four most-relevant security / access controls:
+panel. It centralizes the three most-relevant security / access controls:
 
 | Control | What it does | Where the state lives |
 |---|---|---|
@@ -221,7 +221,6 @@ panel. It centralizes the four most-relevant security / access controls:
 | **Read-only mode** (toggle) | When on, non-local `POST` / `DELETE` to `/api/*` return 403 `{error: "read-only mode"}`. `GET`, `HEAD`, `OPTIONS` are exempt. Local requests are always exempt. `/api/settings` is exempt (escape hatch) | Persisted to `~/.mcode-webui/settings.json` |
 | **Token auth** (toggle) | When on, non-local requests must carry `?token=` or `Authorization: Bearer`. When off, the gate is bypassed even if a token is set (LAN-only deployment mode) | Persisted |
 | **Token value + reset** | First-run: server generates a 32-hex-char token (`crypto.randomBytes(16).toString('hex')`) and writes it to `~/.mcode-webui/settings.json`. The token is **printed to stdout exactly once at first start** (not to `.server.log`). The settings card shows the token until the operator clicks "我已保存" (acknowledge). After acknowledgment, the server stops sending the token in `GET /api/settings` responses — only already-connected clients keep it. `Reset token` generates a new value, persists, broadcasts an `auth.token_rotated` SSE event so other connected clients update their `localStorage` + `Authorization` header live, and resets `tokenAcknowledged` to `false` (the new token is shown again). | Persisted to `~/.mcode-webui/settings.json` (mode 0600, atomic write via `.tmp` + rename) |
-| **Allowed interfaces** (checklist) | When the list is empty (default), all network interfaces are accepted. When the list is non-empty, only connections whose server-side `req.socket.localAddress` matches a checked interface are accepted; others get 403 with an HTML or JSON page. Interface list is captured at server start (restart to pick up new interfaces). | Persisted |
 
 ### 9.1 Token resolution priority (per request)
 
@@ -280,15 +279,15 @@ When the operator hits "Reset token" in the UI:
   persistent settings + token generation + interface lookup.
 - **NEW** `server/lib/auth.js` — adds `setExpectedToken`,
   `setTokenAuthEnabled`. Per-request token check still happens here.
-- `server/lib/lan.js` — adds `getAllNetworkInterfaces`,
-  `getIfaceNameByAddr`, `isInterfaceAllowed`.
-- `server/router.js` — adds interface-allowlist gate, read-only gate
-  (in addition to the existing LAN and token gates).
+- `server/lib/lan.js` — no change in v1.0.1 (kept the existing
+  `detectLanIp` / `isLocalRequest` / `LAN_IP`).
+- `server/router.js` — adds read-only gate (in addition to the existing
+  LAN and token gates). Interface-allowlist gate was prototyped in
+  v1.0.1 but removed before release per PR #16 reviewer scope.
 - `server/routes/settings.js` — accepts new fields, handles rotation.
 - `server/lib/state-bus.js` — adds `broadcastTokenRotated`; SSE state
   push now includes `readOnly`, `tokenEnabled`, `currentToken` (when
-  not acknowledged), `tokenAcknowledged`, `tokenRotatedAt`,
-  `allowedInterfaces`, `availableInterfaces`.
+  not acknowledged), `tokenAcknowledged`, `tokenRotatedAt`.
 - `public/app/state.js` — `HEADERS` is now a live-mutable object;
   new `setToken()` + SSE `auth.token_rotated` handler.
 - `public/app/render.js` — `renderLanCardContent(settings)` exported.
@@ -300,7 +299,6 @@ When the operator hits "Reset token" in the UI:
 - `public/app/i18n.js` — 22 new keys (`lan_card_*`).
 - **NEW** `test/lib-settings.test.js` — persistence + new setters.
 - **NEW** `test/router-readonly.test.js` — read-only gate logic.
-- **NEW** `test/router-interface-filter.test.js` — interface allowlist.
 - Extended `test/lib-auth.test.js` (`setExpectedToken`,
   `setTokenAuthEnabled`), `test/routes-settings.test.js` (new fields,
   `resetToken`, `acknowledgeToken`), `test/_setup.js` (mock shape).

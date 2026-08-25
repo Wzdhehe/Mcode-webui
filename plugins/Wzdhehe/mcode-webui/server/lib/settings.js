@@ -41,7 +41,6 @@ function defaultState() {
     currentToken: "",         // 启动时 init() 决定
     tokenRotatedAt: 0,
     tokenAcknowledged: false,
-    allowedInterfaces: [],    // [] = 全部允许
   };
 }
 
@@ -54,7 +53,6 @@ let tokenAuthEnabled = true;
 let currentToken = "";
 let tokenRotatedAt = 0;
 let tokenAcknowledged = false;
-let allowedInterfaces = [];
 
 // -----------------------------------------------------------------------
 // Token generation
@@ -165,7 +163,6 @@ export function buildPersistBody() {
     currentToken: currentToken,
     tokenRotatedAt: tokenRotatedAt,
     tokenAcknowledged: tokenAcknowledged,
-    allowedInterfaces: allowedInterfaces,
   };
 }
 
@@ -207,16 +204,12 @@ export function init(opts = {}) {
     if (typeof onDisk.currentToken === "string") currentToken = onDisk.currentToken;
     if (typeof onDisk.tokenRotatedAt === "number") tokenRotatedAt = onDisk.tokenRotatedAt;
     if (typeof onDisk.tokenAcknowledged === "boolean") tokenAcknowledged = onDisk.tokenAcknowledged;
-    if (Array.isArray(onDisk.allowedInterfaces)) {
-      allowedInterfaces = onDisk.allowedInterfaces.filter((x) => typeof x === "string");
-    }
   } else {
     firstRun = true;
     // Reset in-memory state to defaults
     readOnlyEnabled = d.readOnly;
     tokenAuthEnabled = d.tokenEnabled;
     tokenAcknowledged = d.tokenAcknowledged;
-    allowedInterfaces = d.allowedInterfaces;
     currentToken = "";
     tokenRotatedAt = 0;
   }
@@ -291,7 +284,10 @@ export function getTokenAcknowledged() {
 }
 
 export function getAllowedInterfaces() {
-  return allowedInterfaces;
+  // Removed in v1.0.1 cleanup (per #16 reviewer scope). Kept as a
+  // no-op stub for tests + clients that still call it — returns the
+  // current "allow all" sentinel ([]).
+  return [];
 }
 
 // getPersistPath — exposed for tests + startup log ("settings at ...")
@@ -332,22 +328,8 @@ export function setTokenAcknowledged(v) {
   try { persistNow(); } catch {}
 }
 
-export function setAllowedInterfaces(ifaces) {
-  if (!Array.isArray(ifaces)) {
-    throw new TypeError("allowedInterfaces must be an array of strings");
-  }
-  // Coerce + dedupe
-  const cleaned = [];
-  const seen = new Set();
-  for (const x of ifaces) {
-    if (typeof x !== "string") continue;
-    if (x === "") continue;
-    if (seen.has(x)) continue;
-    seen.add(x);
-    cleaned.push(x);
-  }
-  allowedInterfaces = cleaned;
-  try { persistNow(); } catch {}
+export function setAllowedInterfaces(_ifaces) {
+  // Removed in v1.0.1 cleanup (per #16 reviewer scope). No-op stub.
 }
 
 // rotateToken — generate a new token, persist, sync to auth module.
@@ -431,11 +413,31 @@ export function rejectLan(res, pathname, remoteIp) {
 // getSettingsSnapshot — returned to clients via /api/settings
 // -----------------------------------------------------------------------
 
+// _effectiveShareToken — token the *server* uses to authenticate
+// non-local requests. Order of precedence (per the auth gate):
+//   1. process.env.TOKEN (env always wins)
+//   2. in-memory currentToken (set by settings.js after init / rotation)
+// Returns "" if no token configured (token auth effectively off).
+function _effectiveShareToken() {
+  if (process.env.TOKEN) return process.env.TOKEN.toString();
+  return tokenAuthEnabled ? currentToken : "";
+}
+
 export function getSettingsSnapshot(availableInterfaces = null) {
   // currentToken is ONLY included when the operator hasn't acknowledged
   // it yet. After acknowledgment we omit the value to reduce the
   // window in which it lives in memory + over the wire.
   const includeToken = !tokenAcknowledged;
+  // v1.0.1: include the full LAN URL (with token) for the top-bar chip
+  // — when the user clicks it, they get a shareable URL that other
+  // devices can actually use. Bare `lanUrl` (no token) stays in the
+  // response for display purposes (the top-bar chip only shows the
+  // host:port, not the query string).
+  const baseUrl = `http://${LAN_IP}:${PORT}`;
+  const shareToken = _effectiveShareToken();
+  const lanUrlWithToken = shareToken
+    ? `${baseUrl}/?token=${encodeURIComponent(shareToken)}`
+    : baseUrl;
   return {
     ok: true,
     lanBroadcast: lanBroadcastEnabled,
@@ -444,16 +446,15 @@ export function getSettingsSnapshot(availableInterfaces = null) {
     tokenAcknowledged: tokenAcknowledged,
     currentToken: includeToken ? currentToken : "",
     tokenRotatedAt: tokenRotatedAt,
-    allowedInterfaces: [...allowedInterfaces],
     port: PORT,
     host: HOST,
     lanIp: LAN_IP,
-    lanUrl: `http://${LAN_IP}:${PORT}`,
+    lanUrl: baseUrl,
+    lanUrlWithToken,
     localUrl: `http://127.0.0.1:${PORT}`,
     mcodeCmd: MCODE_CMD,
     mcodeVersion: "0.1.2",
     defaultWorkspace: DEFAULT_WORKSPACE,
     defaultModel: DEFAULT_MODEL,
-    availableInterfaces: availableInterfaces || [],
   };
 }

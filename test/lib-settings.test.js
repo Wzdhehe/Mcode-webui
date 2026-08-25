@@ -1,7 +1,9 @@
 // webui/test/lib-settings.test.js
 // Unit tests for server/lib/settings.js — LAN broadcast toggle + rejectLan + snapshot.
 // v1.0.1: extend with persistence (read/write ~/.mcode-webui/settings.json) +
-//   new fields (readOnly, tokenEnabled, currentToken, allowedInterfaces, etc).
+//   new fields (readOnly, tokenEnabled, currentToken). The interface-allowlist
+//   feature was added then removed in the same release — stubs for the
+//   removed API are kept (so older test code still imports cleanly).
 //
 // Why this test exists: settings.js holds the runtime-mutable LAN broadcast flag
 // + persistent security settings. When ON: any IP can hit the server. When OFF:
@@ -137,8 +139,7 @@ describe("settings — getSettingsSnapshot", () => {
     assert.equal(typeof snap.tokenEnabled, "boolean");
     assert.equal(typeof snap.tokenAcknowledged, "boolean");
     assert.equal(typeof snap.tokenRotatedAt, "number");
-    assert.ok(Array.isArray(snap.allowedInterfaces));
-    assert.ok(Array.isArray(snap.availableInterfaces));
+    // v1.0.1 cleanup: allowedInterfaces / availableInterfaces removed
   });
 
   test("lanUrl uses PORT and LAN_IP", () => {
@@ -213,26 +214,18 @@ describe("settings — token acknowledged getter/setter", () => {
   });
 });
 
-describe("settings — allowedInterfaces getter/setter", () => {
-  test("default is empty array (allow all)", () => {
+describe("settings — removed: allowedInterfaces stub", () => {
+  // Interface-allowlist feature was added in v1.0.1 then removed per
+  // PR #16 reviewer scope concerns. The getter + setter are kept as
+  // no-ops so older imports don't break. Verify the stubs are safe.
+  test("getAllowedInterfaces returns [] (stub, feature removed)", () => {
     assert.deepEqual(settings.getAllowedInterfaces(), []);
   });
 
-  test("setAllowedInterfaces dedupes + coerces to string array", () => {
-    settings.setAllowedInterfaces(["Wi-Fi", "lo", "Wi-Fi", 123, "", "lo"]);
-    const out = settings.getAllowedInterfaces();
-    assert.deepEqual(out, ["Wi-Fi", "lo"]);
-  });
-
-  test("setAllowedInterfaces rejects non-array input", () => {
-    assert.throws(() => settings.setAllowedInterfaces("Wi-Fi"), TypeError);
-    assert.throws(() => settings.setAllowedInterfaces(null), TypeError);
-    assert.throws(() => settings.setAllowedInterfaces(42), TypeError);
-  });
-
-  test("snapshot reflects allowedInterfaces", () => {
-    settings.setAllowedInterfaces(["Wi-Fi"]);
-    assert.deepEqual(settings.getSettingsSnapshot().allowedInterfaces, ["Wi-Fi"]);
+  test("setAllowedInterfaces is a no-op (stub, feature removed)", () => {
+    // Should not throw, should not change state.
+    assert.doesNotThrow(() => settings.setAllowedInterfaces(["Wi-Fi"]));
+    assert.deepEqual(settings.getAllowedInterfaces(), []);
   });
 });
 
@@ -310,13 +303,6 @@ describe("settings — persistence (MCODE_WEBUI_SETTINGS_PATH override)", () => 
     assert.equal(body.readOnly, true);
   });
 
-  test("setAllowedInterfaces persists to disk", () => {
-    settings.init({ printToken: () => {} });
-    settings.setAllowedInterfaces(["Wi-Fi"]);
-    const body = JSON.parse(readFileSync(settingsFile, "utf8"));
-    assert.deepEqual(body.allowedInterfaces, ["Wi-Fi"]);
-  });
-
   test("rotateToken persists new token + resets acknowledged", () => {
     settings.init({ printToken: () => {} });
     settings.setTokenAcknowledged(true);
@@ -331,13 +317,11 @@ describe("settings — persistence (MCODE_WEBUI_SETTINGS_PATH override)", () => 
   test("load reads existing settings file (round-trip)", () => {
     settings.init({ printToken: () => {} });
     settings.setReadOnly(true);
-    settings.setAllowedInterfaces(["Wi-Fi"]);
     settings.setTokenAcknowledged(true);
     const t1 = settings.getCurrentToken();
 
     const body = JSON.parse(readFileSync(settingsFile, "utf8"));
     assert.equal(body.readOnly, true);
-    assert.deepEqual(body.allowedInterfaces, ["Wi-Fi"]);
     assert.equal(body.tokenAcknowledged, true);
     assert.equal(body.currentToken, t1);
   });

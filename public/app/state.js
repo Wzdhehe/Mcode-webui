@@ -59,6 +59,12 @@ export let TOKEN = readToken()
 stripTokenFromUrl() // must run after readToken(), before any fetch/SSE
 export let TOKEN_QUERY = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ''
 
+// Back-compat: events.js + render.js still import `tokenParam` from
+// earlier versions. It's an alias for TOKEN_QUERY (same semantics).
+// Kept as a deprecated export to avoid breaking older code that may
+// have been depending on it. New code should use TOKEN_QUERY directly.
+export const tokenParam = TOKEN_QUERY
+
 // v0.5.ai: A2 per-client — 每个 webui tab 一个 client id (localStorage 持久化)
 // 拼到所有 /api/xxx URL query string，server 端按 cid 路由 SSE + state
 export const CID = (() => {

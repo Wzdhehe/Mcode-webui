@@ -55,9 +55,15 @@ function stripTokenFromUrl() {
 }
 
 export const urlParams = new URLSearchParams(window.location.search)
-export const TOKEN = readToken()
+export let TOKEN = readToken()
 stripTokenFromUrl() // must run after readToken(), before any fetch/SSE
-export const TOKEN_QUERY = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ''
+export let TOKEN_QUERY = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ''
+
+// Back-compat: events.js + render.js still import `tokenParam` from
+// earlier versions. It's an alias for TOKEN_QUERY (same semantics).
+// Kept as a deprecated export to avoid breaking older code that may
+// have been depending on it. New code should use TOKEN_QUERY directly.
+export const tokenParam = TOKEN_QUERY
 
 // v0.5.ai: A2 per-client — 每个 webui tab 一个 client id (localStorage 持久化)
 // 拼到所有 /api/xxx URL query string，server 端按 cid 路由 SSE + state
@@ -71,9 +77,38 @@ export const CID = (() => {
 })()
 export const CID_QUERY = `cid=${encodeURIComponent(CID)}`
 // API_SUFFIX = TOKEN_QUERY (if any) + '&cid=xxx' (or '?cid=xxx' first)
-export const API_SUFFIX = TOKEN_QUERY ? `${TOKEN_QUERY}&${CID_QUERY}` : `?${CID_QUERY}`
+export let API_SUFFIX = TOKEN_QUERY ? `${TOKEN_QUERY}&${CID_QUERY}` : `?${CID_QUERY}`
 
-export const HEADERS = TOKEN ? { 'Authorization': `Bearer ${TOKEN}` } : {}
+// v1.0.1: HEADERS is a live object — its properties are mutated in place
+// when the token rotates (SSE auth.token_rotated event). All callers use
+// the object reference (not a snapshot) so they always read the current
+// Authorization header at fetch time. Tokens are NEVER logged (per
+// SECURITY-NOTES.md §2).
+export const HEADERS = {}
+if (TOKEN) HEADERS['Authorization'] = `Bearer ${TOKEN}`
+
+// setToken — called by the SSE handler when server pushes a new token
+// (auth.token_rotated). Updates module-level state + localStorage +
+// recomputes the URL query suffix. The next fetch() call automatically
+// picks up the new header (HEADERS is a live binding).
+export function setToken(newToken) {
+  const t = (typeof newToken === 'string') ? newToken : ''
+  TOKEN = t
+  TOKEN_QUERY = t ? `?token=${encodeURIComponent(t)}` : ''
+  API_SUFFIX = TOKEN_QUERY ? `${TOKEN_QUERY}&${CID_QUERY}` : `?${CID_QUERY}`
+  // Mutate the headers object in place (live binding — all importers
+  // see the new Authorization header on their next fetch)
+  if (t) {
+    HEADERS['Authorization'] = `Bearer ${t}`
+  } else {
+    delete HEADERS['Authorization']
+  }
+  // Persist for next reload (covers rotation while the page is open)
+  try {
+    if (t) localStorage.setItem(WEBUI_TOKEN_LS_KEY, t)
+    else localStorage.removeItem(WEBUI_TOKEN_LS_KEY)
+  } catch {}
+}
 
 // ============================================================
 // State
@@ -95,6 +130,19 @@ export function connect() {
   if (es) { try { es.close() } catch {} }
   const url = '/api/events' + API_SUFFIX
   es = new EventSource(url)
+
+  // v1.0.1: named event "auth.token_rotated" — server pushes this when
+  // an operator triggers a token rotation. The body is plain text
+  // (the new token) — we use it to update localStorage + live HEADERS.
+  es.addEventListener('auth.token_rotated', (ev) => {
+    try {
+      const newToken = (ev.data || '').trim()
+      if (!newToken) return
+      setToken(newToken)
+      console.log('[webui] token rotated (SSE); updated HEADERS + localStorage')
+    } catch (e) { console.error('[webui] token rotation handler failed', e) }
+  })
+
   es.onmessage = (ev) => {
     try {
       // v0.5.bx-8: 保留 askUserAnswers (webui-only, server 不存) — SSE 推送整 state 会覆盖

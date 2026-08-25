@@ -67,7 +67,6 @@ let _tokenEnabled = true;
 let _currentToken = "";
 let _tokenRotatedAt = 0;
 let _tokenAcknowledged = false;
-let _allowedInterfaces = [];
 
 // Per-test direct handles (for tests that need to read state after the SUT)
 export const acpMock = _acpMock;
@@ -93,7 +92,6 @@ export function setTokenEnabled(v) { _tokenEnabled = !!v }
 export function setCurrentToken(v) { _currentToken = String(v || "") }
 export function setTokenRotatedAt(v) { _tokenRotatedAt = Number(v) || 0 }
 export function setTokenAcknowledged(v) { _tokenAcknowledged = !!v }
-export function setAllowedInterfaces(v) { _allowedInterfaces = Array.isArray(v) ? [...v] : [] }
 
 /**
  * Register all built-in + webui module mocks on the test context.
@@ -191,7 +189,6 @@ export async function setupMocks(t, overrides = {}) {
   if (overrides.currentToken !== undefined) _currentToken = String(overrides.currentToken || "");
   if (overrides.tokenRotatedAt !== undefined) _tokenRotatedAt = Number(overrides.tokenRotatedAt) || 0;
   if (overrides.tokenAcknowledged !== undefined) _tokenAcknowledged = !!overrides.tokenAcknowledged;
-  if (overrides.allowedInterfaces !== undefined) _allowedInterfaces = Array.isArray(overrides.allowedInterfaces) ? [...overrides.allowedInterfaces] : [];
   t.mock.module(absPath("lib/settings.js"), {
     namedExports: {
       getLanBroadcast: () => _lanBroadcast,
@@ -200,13 +197,13 @@ export async function setupMocks(t, overrides = {}) {
       getCurrentToken: () => _currentToken,
       getTokenRotatedAt: () => _tokenRotatedAt,
       getTokenAcknowledged: () => _tokenAcknowledged,
-      getAllowedInterfaces: () => [..._allowedInterfaces],
+      getAllowedInterfaces: () => [], // stub — feature removed in v1.0.1 cleanup
       // no-op setters (tests should use the imperative setters above)
       setLanBroadcast: (v) => { _lanBroadcast = !!v },
       setReadOnly: (v) => { _readOnly = !!v },
       setTokenEnabled: (v) => { _tokenEnabled = !!v },
       setTokenAcknowledged: (v) => { _tokenAcknowledged = !!v },
-      setAllowedInterfaces: (v) => { _allowedInterfaces = Array.isArray(v) ? [...v] : [] },
+      setAllowedInterfaces: (_v) => { /* no-op — feature removed */ },
       rotateToken: () => {
         const t = "testtoken" + Math.random().toString(16).slice(2, 30);
         _currentToken = t;
@@ -225,8 +222,6 @@ export async function setupMocks(t, overrides = {}) {
         tokenAcknowledged: _tokenAcknowledged,
         currentToken: _tokenAcknowledged ? "" : _currentToken,
         tokenRotatedAt: _tokenRotatedAt,
-        allowedInterfaces: [..._allowedInterfaces],
-        availableInterfaces: [],
         port: 8080, host: "0.0.0.0", lanIp: "127.0.0.1",
         lanUrl: "http://127.0.0.1:8080", localUrl: "http://127.0.0.1:8080",
         mcodeCmd: "mcode", mcodeVersion: "0.1.2",

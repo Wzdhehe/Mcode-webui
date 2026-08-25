@@ -56,8 +56,6 @@ export function render() {
     tokenEnabled: state.tokenEnabled !== false,
     tokenAcknowledged: state.tokenAcknowledged === true,
     currentToken: state.currentToken || '',
-    allowedInterfaces: Array.isArray(state.allowedInterfaces) ? state.allowedInterfaces : [],
-    availableInterfaces: Array.isArray(state.availableInterfaces) ? state.availableInterfaces : [],
   })
 
   // v0.5.aa: TPS 还在用
@@ -360,38 +358,52 @@ export function renderLanCardContent(s) {
   const lanCardTokenValue = document.getElementById('lan-card-token-value')
   const lanCardTokenWarning = document.getElementById('lan-card-token-warning')
   const lanCardTokenAck = document.getElementById('lan-card-token-ack')
-  const lanCardInterfaces = document.getElementById('lan-card-interfaces')
 
   if (lanCardBroadcast) lanCardBroadcast.checked = s.lanBroadcast !== false
   if (lanCardReadonly) lanCardReadonly.checked = s.readOnly === true
   if (lanCardTokenAuth) lanCardTokenAuth.checked = s.tokenEnabled !== false
 
-  // Token value — textContent 不用 innerHTML
+  // Token area: three states
+  //  (a) token available (currentToken non-empty, !acknowledged) — value
+  //      visible (or mask visible, depending on toggle), show/copy buttons
+  //  (b) token not available (currentToken empty, e.g. after acknowledge)
+  //      — show a "saved" placeholder, hide the show/copy buttons
+  //  (c) token enabled is off — show "(disabled)" placeholder
+  const lanCardTokenToggle = document.getElementById('lan-card-token-toggle')
+  const lanCardTokenCopy = document.getElementById('lan-card-token-copy')
+  const lanCardTokenRow = document.getElementById('lan-card-token-row')
+  const tokenEnabled = s.tokenEnabled !== false
+  const hasToken = typeof s.currentToken === 'string' && s.currentToken.length > 0
+
   if (lanCardTokenValue) lanCardTokenValue.textContent = s.currentToken || ''
+
+  if (!tokenEnabled) {
+    // (c) Token auth disabled — don't show token or toggle
+    if (lanCardTokenRow) {
+      lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">— ${escapeHtml(t('lan_card_token_disabled') || 'Token 鉴权已关闭')}</span>`
+    }
+  } else if (!hasToken) {
+    // (b) After acknowledge (or no token on server) — show placeholder
+    if (lanCardTokenRow) {
+      lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">✓ ${escapeHtml(t('lan_card_token_saved') || '已保存')}</span>`
+    }
+  } else {
+    // (a) Token available — make sure mask+value+buttons are rendered
+    // If the row was rewritten above (case b/c), restore the original DOM
+    if (lanCardTokenRow && !lanCardTokenRow.querySelector('#lan-card-token-mask')) {
+      lanCardTokenRow.innerHTML =
+        `<span class="lan-card-token-mask" id="lan-card-token-mask">••••••••••••••••••••••••••••••••</span>` +
+        `<span class="lan-card-token-value" id="lan-card-token-value" hidden></span>` +
+        `<button class="lan-card-btn" id="lan-card-token-toggle" data-i18n="lan_card_token_show">${escapeHtml(t('lan_card_token_show'))}</button>` +
+        `<button class="lan-card-btn" id="lan-card-token-copy" data-i18n="lan_card_token_copy">${escapeHtml(t('lan_card_token_copy'))}</button>`
+      // Click handlers are event-delegated on the row (see events.js),
+      // so the new buttons pick them up automatically — no re-bind needed.
+    }
+  }
+
   // acknowledged 提示
   if (lanCardTokenWarning) lanCardTokenWarning.hidden = s.tokenAcknowledged !== false
   if (lanCardTokenAck) lanCardTokenAck.hidden = s.tokenAcknowledged !== false
-
-  // 接口 checklist
-  if (lanCardInterfaces) {
-    const avail = Array.isArray(s.availableInterfaces) ? s.availableInterfaces : []
-    const allow = Array.isArray(s.allowedInterfaces) ? s.allowedInterfaces : []
-    if (avail.length === 0) {
-      lanCardInterfaces.innerHTML = `<div class="lan-card-no-interfaces">${escapeHtml(t('lan_card_interface_no'))}</div>`
-    } else {
-      const allowAll = allow.length === 0
-      lanCardInterfaces.innerHTML =
-        `<div class="lan-card-interface-status">${allowAll ? '✓ ' + escapeHtml(t('lan_card_interfaces_all')) : '○ ' + escapeHtml(t('lan_card_interfaces_some'))}</div>` +
-        avail.map((iface) => {
-          const checked = allowAll || allow.includes(iface.name)
-          return `<label class="lan-card-interface-item">
-          <input type="checkbox" data-iface="${escapeHtml(iface.name)}" ${checked ? 'checked' : ''} />
-          <span class="lan-card-interface-item-name">${escapeHtml(iface.name)}</span>
-          <span class="lan-card-interface-item-addr">${escapeHtml(iface.address || '')}</span>
-        </label>`
-        }).join('')
-    }
-  }
 }
 
 // v0.5.bx-31: sidebar 首次 SSE 推 mcodeSessions 之前显示 skeleton, 避免点删除/切时 race

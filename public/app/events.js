@@ -901,12 +901,12 @@ export function attachEvents() {
   const lanCardTokenAuth = document.getElementById('lan-card-token-auth')
   const lanCardTokenMask = document.getElementById('lan-card-token-mask')
   const lanCardTokenValue = document.getElementById('lan-card-token-value')
+  const lanCardTokenRow = document.getElementById('lan-card-token-row')
   const lanCardTokenToggle = document.getElementById('lan-card-token-toggle')
   const lanCardTokenCopy = document.getElementById('lan-card-token-copy')
   const lanCardTokenWarning = document.getElementById('lan-card-token-warning')
   const lanCardTokenReset = document.getElementById('lan-card-token-reset')
   const lanCardTokenAck = document.getElementById('lan-card-token-ack')
-  const lanCardInterfaces = document.getElementById('lan-card-interfaces')
 
   // 二级卡片开/合（chip-lan click）
   function setLanCardOpen(open) {
@@ -939,8 +939,10 @@ export function attachEvents() {
       const d = await r.json()
       if (!d.ok) return
       // v0.5.bp: 顶栏链接 chip 始终更新 URL（data-lan-url 留着点复制时用），可见性由 render() 决定
+      // v1.0.1: 用 lanUrlWithToken (含 ?token=xxx) 复制给远程设备, 显示只用 lanUrl
+      //   (host:port) — 防止 token 露在 top-bar 文本上
       if (chipLanLink) {
-        chipLanLink.setAttribute('data-lan-url', d.lanUrl || '')
+        chipLanLink.setAttribute('data-lan-url', d.lanUrlWithToken || d.lanUrl || '')
         if (chipLanLinkText) {
           const u = (d.lanUrl || '').replace(/^https?:\/\//, '')
           chipLanLinkText.textContent = u || '—'
@@ -955,8 +957,6 @@ export function attachEvents() {
         state.tokenEnabled = d.tokenEnabled
         state.tokenAcknowledged = d.tokenAcknowledged
         state.currentToken = d.currentToken || ''
-        state.allowedInterfaces = d.allowedInterfaces || []
-        state.availableInterfaces = d.availableInterfaces || []
         state.tokenRotatedAt = d.tokenRotatedAt || 0
       }
     } catch (e) { console.error('[lan] load failed', e) }
@@ -1049,35 +1049,43 @@ export function attachEvents() {
     })
   }
 
-  // Token 显示/隐藏
-  if (lanCardTokenToggle) {
-    lanCardTokenToggle.addEventListener('click', () => {
-      const showing = !lanCardTokenValue.hidden
-      if (showing) {
-        lanCardTokenValue.hidden = true
-        lanCardTokenMask.hidden = false
-        lanCardTokenToggle.textContent = t('lan_card_token_show')
-      } else {
-        lanCardTokenValue.hidden = false
-        lanCardTokenMask.hidden = true
-        lanCardTokenToggle.textContent = t('lan_card_token_hide')
-      }
-    })
-  }
-
-  // Token 复制
-  if (lanCardTokenCopy) {
-    lanCardTokenCopy.addEventListener('click', async () => {
-      const tok = (state && state.currentToken) || ''
-      if (!tok) {
-        showToast(t('lan_card_token_value') + ': (empty)', 1500)
+  // Token 显示/隐藏 — 用 row 事件代理, row 内部 HTML 被 renderLanCardContent
+  // 替换时 (acknowledged 后) 新的按钮自动继承 handler, 不需要重新 bind
+  if (lanCardTokenRow) {
+    lanCardTokenRow.addEventListener('click', (e) => {
+      const toggleBtn = e.target.closest('#lan-card-token-toggle')
+      const copyBtn = e.target.closest('#lan-card-token-copy')
+      if (toggleBtn) {
+        const valueEl = document.getElementById('lan-card-token-value')
+        const maskEl = document.getElementById('lan-card-token-mask')
+        if (!valueEl || !maskEl) return
+        const showing = !valueEl.hidden
+        if (showing) {
+          valueEl.hidden = true
+          maskEl.hidden = false
+          toggleBtn.textContent = t('lan_card_token_show')
+        } else {
+          valueEl.hidden = false
+          maskEl.hidden = true
+          toggleBtn.textContent = t('lan_card_token_hide')
+        }
         return
       }
-      try {
-        await navigator.clipboard.writeText(tok)
-        showToast(t('lan_card_token_copied'), 1500)
-      } catch (err) {
-        showToast(t('copy_failed') + ': ' + err.message, 2000)
+      if (copyBtn) {
+        const tok = (state && state.currentToken) || ''
+        if (!tok) {
+          showToast(t('lan_card_token_value') + ': (empty)', 1500)
+          return
+        }
+        ;(async () => {
+          try {
+            await navigator.clipboard.writeText(tok)
+            showToast(t('lan_card_token_copied'), 1500)
+          } catch (err) {
+            showToast(t('copy_failed') + ': ' + err.message, 2000)
+          }
+        })()
+        return
       }
     })
   }
@@ -1138,45 +1146,6 @@ export function attachEvents() {
         alert('确认失败: ' + err.message)
       }
     })
-  }
-
-  // 接口 checkbox change (事件代理)
-  if (lanCardInterfaces) {
-    lanCardInterfaces.addEventListener('change', async (e) => {
-      const cb = e.target.closest('input[type="checkbox"][data-iface]')
-      if (!cb) return
-      const iface = cb.getAttribute('data-iface')
-      const allowlist = collectAllowedInterfaces()
-      if (cb.checked && !allowlist.includes(iface)) allowlist.push(iface)
-      if (!cb.checked) {
-        const i = allowlist.indexOf(iface)
-        if (i >= 0) allowlist.splice(i, 1)
-      }
-      try {
-        const r = await fetch('/api/settings' + API_SUFFIX, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...HEADERS },
-          body: JSON.stringify({ allowedInterfaces: allowlist }),
-        })
-        const d = await r.json()
-        if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); cb.checked = !cb.checked; return }
-        if (state) state.allowedInterfaces = d.allowedInterfaces || []
-        render()
-      } catch (err) {
-        console.error('[lan] interface toggle failed', err)
-        alert('切换失败: ' + err.message)
-        cb.checked = !cb.checked
-      }
-    })
-  }
-
-  function collectAllowedInterfaces() {
-    if (!lanCardInterfaces) return []
-    const out = []
-    lanCardInterfaces.querySelectorAll('input[type="checkbox"][data-iface]:checked').forEach((cb) => {
-      out.push(cb.getAttribute('data-iface'))
-    })
-    return out
   }
 
   // New chat

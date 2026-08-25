@@ -2,12 +2,11 @@
 // GET/POST /api/settings
 //
 // v0.5.ap: lanBroadcast toggle
-// v1.0.1: readOnly / tokenEnabled / allowedInterfaces / resetToken /
-//   acknowledgeToken. Rotation broadcasts an SSE event so other clients
-//   can update their localStorage.
+// v1.0.1: readOnly / tokenEnabled / resetToken / acknowledgeToken.
+//   Rotation broadcasts an SSE event so other clients can update their
+//   localStorage.
 
 import {
-  getAllowedInterfaces,
   getLanBroadcast,
   getReadOnly,
   getSettingsSnapshot,
@@ -15,19 +14,17 @@ import {
   getTokenEnabled,
   getTokenRotatedAt,
   rotateToken,
-  setAllowedInterfaces,
   setLanBroadcast,
   setReadOnly,
   setTokenAcknowledged,
   setTokenEnabled,
 } from "../lib/settings.js";
-import { getAllNetworkInterfaces } from "../lib/lan.js";
 import { setTokenAuthEnabled } from "../lib/auth.js";
 import { broadcastTokenRotated, pushStateFor } from "../lib/state-bus.js";
 
 export function handleGetSettings(_req, res) {
   res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-  return res.end(JSON.stringify(getSettingsSnapshot(getAllNetworkInterfaces())));
+  return res.end(JSON.stringify(getSettingsSnapshot()));
 }
 
 export async function handlePostSettings(req, res, ctx) {
@@ -70,26 +67,6 @@ export async function handlePostSettings(req, res, ctx) {
     setTokenEnabled(payload.tokenEnabled);
     setTokenAuthEnabled(payload.tokenEnabled);
     changed = true;
-  }
-
-  // allowedInterfaces — array of interface names
-  if (Array.isArray(payload.allowedInterfaces)) {
-    const available = getAllNetworkInterfaces().map((i) => i.name);
-    // Filter unknown names out (defensive: client might cache old list)
-    const cleaned = payload.allowedInterfaces.filter(
-      (n) => typeof n === "string" && available.includes(n),
-    );
-    // Compare to current
-    const cur = getAllowedInterfaces();
-    let diff = cleaned.length !== cur.length;
-    if (!diff) {
-      const a = new Set(cur);
-      for (const n of cleaned) if (!a.has(n)) { diff = true; break; }
-    }
-    if (diff) {
-      setAllowedInterfaces(cleaned);
-      changed = true;
-    }
   }
 
   // resetToken — generate a new token, broadcast SSE, return the new value
@@ -145,7 +122,7 @@ export async function handlePostSettings(req, res, ctx) {
     try { pushStateFor("__broadcast__"); } catch {}
   }
 
-  const snap = getSettingsSnapshot(getAllNetworkInterfaces());
+  const snap = getSettingsSnapshot();
   res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
   return res.end(JSON.stringify({ ...snap, changed, tokenRotated }));
 }
