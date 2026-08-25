@@ -6,7 +6,7 @@
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
 import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, connect, es, getGeneralQuota, leftOpen, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
-import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
+import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderLanCardContent, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
 
 export let slashOpen = false
 export let slashQuery = ''
@@ -888,11 +888,50 @@ export function attachEvents() {
     }
   } catch {}
 
-  // v0.5.aq: chip-lan toggle — 点 chip 切换 LAN 访问（访问 URL 在顶栏 chip，点击复制）
+  // v0.5.aq: chip-lan — v1.0.1 起改为"点开二级卡片"入口（不再直接 toggle LAN）
   const chipLan = document.getElementById('chip-lan')
   // v0.5.bp: 顶栏 LAN 访问链接 chip（LAN on 时显示当前 IP，点复制完整 URL）
   const chipLanLink = document.getElementById('chip-lan-link')
   const chipLanLinkText = document.getElementById('chip-lan-link-text')
+
+  // v1.0.1: 二级卡片 DOM 引用
+  const lanCard = document.getElementById('lan-card')
+  const lanCardBroadcast = document.getElementById('lan-card-broadcast')
+  const lanCardReadonly = document.getElementById('lan-card-readonly')
+  const lanCardTokenAuth = document.getElementById('lan-card-token-auth')
+  const lanCardTokenMask = document.getElementById('lan-card-token-mask')
+  const lanCardTokenValue = document.getElementById('lan-card-token-value')
+  const lanCardTokenToggle = document.getElementById('lan-card-token-toggle')
+  const lanCardTokenCopy = document.getElementById('lan-card-token-copy')
+  const lanCardTokenWarning = document.getElementById('lan-card-token-warning')
+  const lanCardTokenReset = document.getElementById('lan-card-token-reset')
+  const lanCardTokenAck = document.getElementById('lan-card-token-ack')
+  const lanCardInterfaces = document.getElementById('lan-card-interfaces')
+
+  // 二级卡片开/合（chip-lan click）
+  function setLanCardOpen(open) {
+    if (!lanCard || !chipLan) return
+    lanCard.hidden = !open
+    chipLan.setAttribute('aria-expanded', open ? 'true' : 'false')
+  }
+  function toggleLanCard() {
+    setLanCardOpen(lanCard ? lanCard.hidden : false)
+  }
+
+  // 点击 chip = 切二级卡片
+  if (chipLan) {
+    chipLan.addEventListener('click', (e) => {
+      e.stopPropagation()
+      toggleLanCard()
+    })
+  }
+
+  // 点击 chip 外部关闭卡片
+  document.addEventListener('click', (e) => {
+    if (!lanCard || lanCard.hidden) return
+    if (lanCard.contains(e.target) || chipLan.contains(e.target)) return
+    setLanCardOpen(false)
+  })
 
   async function loadLanInfo() {
     try {
@@ -903,18 +942,28 @@ export function attachEvents() {
       if (chipLanLink) {
         chipLanLink.setAttribute('data-lan-url', d.lanUrl || '')
         if (chipLanLinkText) {
-          // 只显示 host:port（去掉 http:// 前缀，紧凑）
           const u = (d.lanUrl || '').replace(/^https?:\/\//, '')
           chipLanLinkText.textContent = u || '—'
         }
       } else {
         console.warn('[lan] chipLanLink NOT found in DOM — element missing?')
       }
+      // v1.0.1: 把 settings 同步到 state, sub-card 渲染靠 state
+      if (state) {
+        state.lanBroadcast = d.lanBroadcast
+        state.readOnly = d.readOnly
+        state.tokenEnabled = d.tokenEnabled
+        state.tokenAcknowledged = d.tokenAcknowledged
+        state.currentToken = d.currentToken || ''
+        state.allowedInterfaces = d.allowedInterfaces || []
+        state.availableInterfaces = d.availableInterfaces || []
+        state.tokenRotatedAt = d.tokenRotatedAt || 0
+      }
     } catch (e) { console.error('[lan] load failed', e) }
   }
-  loadLanInfo()  // 启动时拉一次（hover 时再刷新一次也 OK）
+  loadLanInfo()  // 启动时拉一次
 
-  // v0.5.bp: 顶栏 LAN 链接点击 = 复制完整 URL 到剪贴板（data-lan-url 由 loadLanInfo 填入，URL 来自 server 的 detectLanIp()，非硬编码）
+  // v0.5.bp: 顶栏 LAN 链接点击 = 复制完整 URL 到剪贴板
   if (chipLanLink) {
     chipLanLink.addEventListener('click', async (e) => {
       e.preventDefault()
@@ -929,32 +978,206 @@ export function attachEvents() {
     })
   }
 
-  // 点击 chip = 切换 LAN 访问 on/off
-  if (chipLan) {
-    chipLan.addEventListener('click', async (e) => {
-    e.stopPropagation()
-    const wasOn = chipLan.getAttribute('data-lan') === 'on'
-    const enabled = !wasOn
-    try {
-      const r = await fetch('/api/settings' + API_SUFFIX, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...HEADERS },
-        body: JSON.stringify({ lanBroadcast: enabled }),
-      })
-      const d = await r.json()
-      if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); return }
-      if (state) state.lanBroadcast = enabled
-      render()
-      showToast(enabled ? t('lan_title_on') : t('lan_title_off'))
-    } catch (e) {
-      console.error('[lan] toggle failed', e)
-      alert('切换失败: ' + e.message)
-    }
-  })
+  // ----------------------------------------------------------------
+  // v1.0.1: sub-card handlers
+  // ----------------------------------------------------------------
+
+  // LAN 广播 toggle (在卡片里)
+  if (lanCardBroadcast) {
+    lanCardBroadcast.addEventListener('change', async (e) => {
+      const enabled = !!e.target.checked
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ lanBroadcast: enabled }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); e.target.checked = !enabled; return }
+        if (state) state.lanBroadcast = enabled
+        render()
+        showToast(enabled ? t('lan_title_on') : t('lan_title_off'))
+      } catch (err) {
+        console.error('[lan] toggle failed', err)
+        alert('切换失败: ' + err.message)
+        e.target.checked = !enabled
+      }
+    })
   }
 
-  // v0.5.bx-40: LAN URL hover popover 已删除 — 顶栏 chip-lan-link 已展示访问地址（点击复制），
-  //   且旧 popover 定位在 LAN 卡片正下方，会盖住 GitHub 链接
+  // 只读模式 toggle
+  if (lanCardReadonly) {
+    lanCardReadonly.addEventListener('change', async (e) => {
+      const enabled = !!e.target.checked
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ readOnly: enabled }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); e.target.checked = !enabled; return }
+        if (state) state.readOnly = enabled
+        render()
+      } catch (err) {
+        console.error('[lan] readOnly toggle failed', err)
+        alert('切换失败: ' + err.message)
+        e.target.checked = !enabled
+      }
+    })
+  }
+
+  // Token 鉴权 toggle
+  if (lanCardTokenAuth) {
+    lanCardTokenAuth.addEventListener('change', async (e) => {
+      const enabled = !!e.target.checked
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ tokenEnabled: enabled }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); e.target.checked = !enabled; return }
+        if (state) state.tokenEnabled = enabled
+        render()
+      } catch (err) {
+        console.error('[lan] tokenEnabled toggle failed', err)
+        alert('切换失败: ' + err.message)
+        e.target.checked = !enabled
+      }
+    })
+  }
+
+  // Token 显示/隐藏
+  if (lanCardTokenToggle) {
+    lanCardTokenToggle.addEventListener('click', () => {
+      const showing = !lanCardTokenValue.hidden
+      if (showing) {
+        lanCardTokenValue.hidden = true
+        lanCardTokenMask.hidden = false
+        lanCardTokenToggle.textContent = t('lan_card_token_show')
+      } else {
+        lanCardTokenValue.hidden = false
+        lanCardTokenMask.hidden = true
+        lanCardTokenToggle.textContent = t('lan_card_token_hide')
+      }
+    })
+  }
+
+  // Token 复制
+  if (lanCardTokenCopy) {
+    lanCardTokenCopy.addEventListener('click', async () => {
+      const tok = (state && state.currentToken) || ''
+      if (!tok) {
+        showToast(t('lan_card_token_value') + ': (empty)', 1500)
+        return
+      }
+      try {
+        await navigator.clipboard.writeText(tok)
+        showToast(t('lan_card_token_copied'), 1500)
+      } catch (err) {
+        showToast(t('copy_failed') + ': ' + err.message, 2000)
+      }
+    })
+  }
+
+  // Token 重置
+  if (lanCardTokenReset) {
+    lanCardTokenReset.addEventListener('click', async () => {
+      if (!confirm(t('lan_card_reset_token_confirm'))) return
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ resetToken: true }),
+        })
+        const d = await r.json()
+        if (!d.ok || d.tokenRotated !== true) {
+          alert('重置失败: ' + (d.error || '未知错误'))
+          return
+        }
+        // 服务端已通过 SSE 推送新 token (auth.token_rotated) — 我们的 setToken handler 会更新 localStorage + HEADERS
+        // 这里再把 state 同步一下, 让 UI 立即反映
+        if (state) {
+          state.currentToken = d.currentToken || ''
+          state.tokenAcknowledged = false
+          state.tokenRotatedAt = d.tokenRotatedAt || Date.now()
+        }
+        // 强制显示新 token (因为 acknowledged 重置为 false)
+        if (lanCardTokenValue) lanCardTokenValue.hidden = false
+        if (lanCardTokenMask) lanCardTokenMask.hidden = true
+        if (lanCardTokenToggle) lanCardTokenToggle.textContent = t('lan_card_token_hide')
+        render()
+        showToast(t('lan_card_token_rotated_toast'), 2000)
+      } catch (err) {
+        console.error('[lan] resetToken failed', err)
+        alert('重置失败: ' + err.message)
+      }
+    })
+  }
+
+  // "我已保存" — 确认 token, 之后服务端不再下发 currentToken
+  if (lanCardTokenAck) {
+    lanCardTokenAck.addEventListener('click', async () => {
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ acknowledgeToken: true }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('确认失败: ' + (d.error || '未知错误')); return }
+        if (state) {
+          state.tokenAcknowledged = true
+          state.currentToken = ''
+        }
+        render()
+      } catch (err) {
+        console.error('[lan] acknowledgeToken failed', err)
+        alert('确认失败: ' + err.message)
+      }
+    })
+  }
+
+  // 接口 checkbox change (事件代理)
+  if (lanCardInterfaces) {
+    lanCardInterfaces.addEventListener('change', async (e) => {
+      const cb = e.target.closest('input[type="checkbox"][data-iface]')
+      if (!cb) return
+      const iface = cb.getAttribute('data-iface')
+      const allowlist = collectAllowedInterfaces()
+      if (cb.checked && !allowlist.includes(iface)) allowlist.push(iface)
+      if (!cb.checked) {
+        const i = allowlist.indexOf(iface)
+        if (i >= 0) allowlist.splice(i, 1)
+      }
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ allowedInterfaces: allowlist }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); cb.checked = !cb.checked; return }
+        if (state) state.allowedInterfaces = d.allowedInterfaces || []
+        render()
+      } catch (err) {
+        console.error('[lan] interface toggle failed', err)
+        alert('切换失败: ' + err.message)
+        cb.checked = !cb.checked
+      }
+    })
+  }
+
+  function collectAllowedInterfaces() {
+    if (!lanCardInterfaces) return []
+    const out = []
+    lanCardInterfaces.querySelectorAll('input[type="checkbox"][data-iface]:checked').forEach((cb) => {
+      out.push(cb.getAttribute('data-iface'))
+    })
+    return out
+  }
 
   // New chat
   // v0.5.ar: 新建会话 → 弹工作区选择 popover（选完工作区再调 /api/sessions）

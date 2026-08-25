@@ -1,15 +1,28 @@
 // webui/server/router.js
 // Central HTTP request dispatcher.
 //
-// URL → handler mapping. LAN reject happens FIRST (before route matching).
+// Order of gates (top-to-bottom):
+//   1. CORS headers (always)
+//   2. Interface allowlist check (per-connection localAddress)
+//   3. LAN reject (non-local + LAN off)
+//   4. Token auth (non-local + token enabled + token set)
+//   5. Read-only gate (non-local + readOnly + non-GET/OPTIONS)
+//   6. Route dispatch
 //
-// Each handler receives (req, res, ctx) where ctx = { cid, cs, pathname }.
-// cid/cs are per-client; pathname is the URL path (no query string).
+// Local requests (loopback + this host's LAN_IP) bypass all of (2)(3)(4)(5).
+// `/api/settings` is exempted from (3) so users can flip the LAN switch
+// back on from a remote device.
 
-import { isLocalRequest } from "./lib/lan.js";
-import { getLanBroadcast, rejectLan } from "./lib/settings.js";
+import { isLocalRequest, isInterfaceAllowed } from "./lib/lan.js";
+import {
+  getAllowedInterfaces,
+  getLanBroadcast,
+  getReadOnly,
+  rejectLan,
+} from "./lib/settings.js";
 import { getClient, getCidFromReq } from "./lib/state-bus.js";
 import { serveStatic, serveIndex } from "./lib/static.js";
+import { isRequestAuthorized, writeAuthRequired } from "./lib/auth.js";
 
 import * as healthRoute from "./routes/health.js";
 import * as stateRoute from "./routes/state.js";
@@ -23,6 +36,37 @@ import * as modelRoute from "./routes/model.js";
 import * as debugRoute from "./routes/debug.js";
 // v0.5.by: mcode acp 协议 RPC 路由 (set_mode / set_config_option / cancel / load / activate)
 import * as protocolRoute from "./routes/protocol.js";
+
+function rejectInterface(res, pathname, localAddr) {
+  const isApi = pathname.startsWith("/api/");
+  // Always allow /api/settings so the user can flip the switch back
+  if (pathname === "/api/settings") return false;
+  if (isApi) {
+    res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({
+      ok: false,
+      error: "network interface not allowed (check settings card)",
+    }));
+    return true;
+  }
+  res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>webui — interface blocked</title></head>
+<body style="font-family:sans-serif;max-width:560px;margin:80px auto;padding:24px;">
+<h1>🚫 Network interface blocked</h1>
+<p>You are connecting through an interface that is not in the allowlist.</p>
+<p>Local address: <code>${localAddr || "?"}</code></p>
+<p>Open <a href="http://127.0.0.1:8080/">http://127.0.0.1:8080/</a> on the host machine and adjust the LAN card → "Allowed interfaces" section.</p>
+</body></html>`);
+  return true;
+}
+
+function rejectReadOnly(res, _pathname) {
+  if (!res.headersSent) {
+    res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: "read-only mode" }));
+  }
+  return true;
+}
 
 // Route table: pattern → handler. Patterns are tested in declaration order; first match wins.
 // Each entry: { method, match(pathname) → boolean, handler(req, res, ctx) }
@@ -263,10 +307,58 @@ export async function handleRequest(req, res) {
 
   const pathname = (req.url || "/").split("?")[0];
   const cid = getCidFromReq(req);
+  const local = isLocalRequest(req);
 
-  // LAN check (only for non-local requests; /api/settings is the exception that lets users turn LAN back on)
-  if (!isLocalRequest(req) && !getLanBroadcast()) {
+  // Gate 1: interface allowlist (v1.0.1)
+  //   - Empty allowlist = allow all (back-compat with v0.5.ao)
+  //   - Local requests always bypass (the user can edit settings locally)
+  if (!local) {
+    const ifaces = getAllowedInterfaces();
+    if (ifaces.length > 0) {
+      if (!isInterfaceAllowed(req.socket.localAddress, ifaces)) {
+        if (rejectInterface(res, pathname, req.socket.localAddress)) return;
+      }
+    }
+  }
+
+  // Gate 2: LAN reject (only for non-local requests; /api/settings is the exception that lets users turn LAN back on)
+  if (!local && !getLanBroadcast()) {
     if (rejectLan(res, pathname, req.socket.remoteAddress)) return;
+  }
+
+  // Gate 3: token auth (v1.0.1).
+  //   - Local request: always allowed.
+  //   - /api/* routes (incl. SSE /api/events): gated when TOKEN auth enabled.
+  //   - Static files (HTML/CSS/JS/images) and OPTIONS: always public so
+  //     the SPA can bootstrap (load index.html, fetch app/main.js) and so
+  //     EventSource preflight / static asset CORS works.
+  //   - The SPA reads ?token= from the URL (browser) and stores it in
+  //     localStorage; subsequent fetch + EventSource attach it as
+  //     Authorization: Bearer / ?token=.
+  if (
+    pathname.startsWith("/api/") &&
+    !isRequestAuthorized(req) &&
+    writeAuthRequired(res)
+  ) {
+    return;
+  }
+
+  // Gate 4: read-only mode (v1.0.1)
+  //   - Local request: always allowed (admin should never get locked out)
+  //   - OPTIONS preflight: always allowed
+  //   - Non-GET (POST/PUT/DELETE): 403
+  //   - /api/settings: allowed (so the user can flip the switch back off)
+  if (
+    !local &&
+    pathname.startsWith("/api/") &&
+    pathname !== "/api/settings" &&
+    req.method !== "GET" &&
+    req.method !== "OPTIONS" &&
+    req.method !== "HEAD" &&
+    getReadOnly() &&
+    rejectReadOnly(res, pathname)
+  ) {
+    return;
   }
 
   const cs = getClient(cid);

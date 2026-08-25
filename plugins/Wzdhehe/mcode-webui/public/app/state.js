@@ -14,9 +14,49 @@ import { SLASH_COMMANDS, SLASH_SKILLS, attachEvents, attachModalEvents, attached
 // ============================================================
 // Config
 // ============================================================
+// v1.0.1: token 持久化 + URL strip
+//   1. 优先用 URL query 里的 ?token=（用户从带 token 的链接进来）
+//   2. fallback 到 localStorage（reload / 新 tab 时还在；F5 后 URL 没 token
+//      也不会立刻 401）
+//   3. 拿到 token 后立刻 history.replaceState 把 ?token= 从 URL 抹掉，
+//      避免 token 长期留在地址栏、浏览器 history、Referer header
+//   4. 同步写到 localStorage，下次启动继续用
+//
+// 注意: token 不能 log, 不能 echo back, 不能进 URL fragment, 不能进
+// 任何 SSE / API 的 log。SECURITY-NOTES.md §2 完整说明了 trade-off。
+const WEBUI_TOKEN_LS_KEY = 'webui_token'
+
+function readToken() {
+  // 1. URL ?token= takes precedence (user opening a link)
+  const fromUrl = urlParams.get('token')
+  if (fromUrl) {
+    try { localStorage.setItem(WEBUI_TOKEN_LS_KEY, fromUrl) } catch {}
+    return fromUrl
+  }
+  // 2. localStorage fallback (F5, new tab, deep-link without token)
+  try {
+    const fromLs = localStorage.getItem(WEBUI_TOKEN_LS_KEY)
+    if (fromLs) return fromLs
+  } catch {}
+  return ''
+}
+
+// URL strip — must run exactly once at module load, before any
+// fetch / EventSource is created (so the address bar is clean and
+// the browser never sends the token via Referer to same-origin assets).
+function stripTokenFromUrl() {
+  if (!urlParams.has('token')) return
+  try {
+    const clean = window.location.pathname + (window.location.hash || '')
+    window.history.replaceState(null, '', clean)
+  } catch {
+    // private mode etc. — token is still in localStorage so reload works
+  }
+}
+
 export const urlParams = new URLSearchParams(window.location.search)
-export const tokenParam = urlParams.get('token') || ''
-export const TOKEN = tokenParam  // 给 fetch/SSE 用
+export const TOKEN = readToken()
+stripTokenFromUrl() // must run after readToken(), before any fetch/SSE
 export const TOKEN_QUERY = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ''
 
 // v0.5.ai: A2 per-client — 每个 webui tab 一个 client id (localStorage 持久化)

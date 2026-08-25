@@ -2864,3 +2864,202 @@ body.is-remote .btn-lan-toggle { display: none; }
   content: '⚡';
   margin-right: 4px;
 }
+
+/* ============================================================
+   v1.0.1: LAN sub-card (二级卡片)
+   点开 #chip-lan 后展开；含只读/Token 鉴权/接口过滤等
+   ============================================================ */
+.lan-card {
+  margin: 4px 8px 8px 8px;
+  padding: 12px 12px 14px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+  color: var(--text);
+  /* 当 hidden 时不占空间 */
+}
+.lan-card[hidden] { display: none; }
+.lan-card-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+.lan-card-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.lan-card-row:last-of-type { border-bottom: none; }
+.lan-card-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.lan-card-row-label > span:first-child {
+  font-weight: 500;
+  color: var(--text);
+}
+.lan-card-row-help {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+.lan-card-toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.lan-card-toggle input { opacity: 0; width: 0; height: 0; }
+.lan-card-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--border);
+  border-radius: 20px;
+  transition: background 0.2s;
+}
+.lan-card-toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 14px; width: 14px;
+  left: 3px; bottom: 3px;
+  background: var(--bg-elevated);
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+.lan-card-toggle input:checked + .lan-card-toggle-slider { background: var(--status-on); }
+.lan-card-toggle input:checked + .lan-card-toggle-slider::before { transform: translateX(16px); }
+.lan-card-toggle input:focus + .lan-card-toggle-slider { box-shadow: 0 0 0 2px var(--accent-bg); }
+.lan-card-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+.lan-card-section-label {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.lan-card-token-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.lan-card-token-mask,
+.lan-card-token-value {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+.lan-card-token-value {
+  color: var(--text);
+}
+.lan-card-btn {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.lan-card-btn:hover { background: var(--bg-hover); border-color: var(--border); }
+.lan-card-btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.lan-card-btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.lan-card-btn-danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.lan-card-btn-danger:hover { background: var(--danger); color: var(--on-accent); }
+.lan-card-warning {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--text);
+  line-height: 1.5;
+}
+.lan-card-warning::before {
+  content: '⚠ ';
+  margin-right: 2px;
+}
+.lan-card-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.lan-card-help {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+.lan-card-interfaces {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lan-card-interface-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.lan-card-interface-item:hover { background: var(--bg-hover); }
+.lan-card-interface-item input { cursor: pointer; }
+.lan-card-interface-item-name { color: var(--text); font-weight: 500; }
+.lan-card-interface-item-addr {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin-left: 4px;
+}
+.lan-card-no-interfaces {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-style: italic;
+  padding: 4px 6px;
+}
+.lan-card-interface-status {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  padding: 2px 6px 4px 6px;
+  font-weight: 500;
+}
+/* chip-lan 展开态 — chevron 旋转提示 */
+.btn-lan-toggle[aria-expanded="true"] .btn-chevron { transform: rotate(90deg); }
+.btn-lan-toggle .btn-chevron { transition: transform 0.2s; }

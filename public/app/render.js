@@ -48,6 +48,18 @@ export function render() {
     console.warn('[lan] render: chip-lan-link element NOT found in DOM')
   }
 
+  // v1.0.1: 同步 sub-card 内容 (即使卡片是 hidden 状态, 也更新 input value
+  // 这样打开时是新鲜的)
+  renderLanCardContent({
+    lanBroadcast,
+    readOnly: state.readOnly === true,
+    tokenEnabled: state.tokenEnabled !== false,
+    tokenAcknowledged: state.tokenAcknowledged === true,
+    currentToken: state.currentToken || '',
+    allowedInterfaces: Array.isArray(state.allowedInterfaces) ? state.allowedInterfaces : [],
+    availableInterfaces: Array.isArray(state.availableInterfaces) ? state.availableInterfaces : [],
+  })
+
   // v0.5.aa: TPS 还在用
   const tpsEl = document.getElementById('chip-tps')
 
@@ -331,6 +343,56 @@ export function renderTodo() {
 export let collapsedWorkspaces = (() => {
   try { return new Set(JSON.parse(localStorage.getItem('webui_ws_collapsed_v1') || '[]')) } catch { return new Set() }
 })()
+
+// v1.0.1: 渲染 LAN sub-card (#lan-card) 的内容. 接收 settings 对象
+// (从 SSE push 或 fetch /api/settings) 并更新各 input / token value /
+// 接口 checklist. 即使卡片 hidden 也调用 — 这样打开时已经是最新值.
+//
+// 注意: token 渲染走 textContent 不用 innerHTML 防 XSS (SECURITY-NOTES.md §2).
+export function renderLanCardContent(s) {
+  if (!s) return
+  const lanCard = document.getElementById('lan-card')
+  if (!lanCard) return  // DOM 还没准备好 (在 app 启动前调用)
+  const lanCardBroadcast = document.getElementById('lan-card-broadcast')
+  const lanCardReadonly = document.getElementById('lan-card-readonly')
+  const lanCardTokenAuth = document.getElementById('lan-card-token-auth')
+  const lanCardTokenMask = document.getElementById('lan-card-token-mask')
+  const lanCardTokenValue = document.getElementById('lan-card-token-value')
+  const lanCardTokenWarning = document.getElementById('lan-card-token-warning')
+  const lanCardTokenAck = document.getElementById('lan-card-token-ack')
+  const lanCardInterfaces = document.getElementById('lan-card-interfaces')
+
+  if (lanCardBroadcast) lanCardBroadcast.checked = s.lanBroadcast !== false
+  if (lanCardReadonly) lanCardReadonly.checked = s.readOnly === true
+  if (lanCardTokenAuth) lanCardTokenAuth.checked = s.tokenEnabled !== false
+
+  // Token value — textContent 不用 innerHTML
+  if (lanCardTokenValue) lanCardTokenValue.textContent = s.currentToken || ''
+  // acknowledged 提示
+  if (lanCardTokenWarning) lanCardTokenWarning.hidden = s.tokenAcknowledged !== false
+  if (lanCardTokenAck) lanCardTokenAck.hidden = s.tokenAcknowledged !== false
+
+  // 接口 checklist
+  if (lanCardInterfaces) {
+    const avail = Array.isArray(s.availableInterfaces) ? s.availableInterfaces : []
+    const allow = Array.isArray(s.allowedInterfaces) ? s.allowedInterfaces : []
+    if (avail.length === 0) {
+      lanCardInterfaces.innerHTML = `<div class="lan-card-no-interfaces">${escapeHtml(t('lan_card_interface_no'))}</div>`
+    } else {
+      const allowAll = allow.length === 0
+      lanCardInterfaces.innerHTML =
+        `<div class="lan-card-interface-status">${allowAll ? '✓ ' + escapeHtml(t('lan_card_interfaces_all')) : '○ ' + escapeHtml(t('lan_card_interfaces_some'))}</div>` +
+        avail.map((iface) => {
+          const checked = allowAll || allow.includes(iface.name)
+          return `<label class="lan-card-interface-item">
+          <input type="checkbox" data-iface="${escapeHtml(iface.name)}" ${checked ? 'checked' : ''} />
+          <span class="lan-card-interface-item-name">${escapeHtml(iface.name)}</span>
+          <span class="lan-card-interface-item-addr">${escapeHtml(iface.address || '')}</span>
+        </label>`
+        }).join('')
+    }
+  }
+}
 
 // v0.5.bx-31: sidebar 首次 SSE 推 mcodeSessions 之前显示 skeleton, 避免点删除/切时 race
 //   mcode acp singleton 启动要 1-3s, 期间 state.mcodeSessions=[] → render 显示空
