@@ -2529,6 +2529,9 @@ body.is-remote .btn-lan-toggle { display: none; }
   .chat-area { width: 100%; }
   .btn-mobile-toggle { display: inline-flex !important; }
   .topbar-status { display: none; }
+  /* v1.0.1: 移动端也必须显示只读 chip (read-only 是关键安全提示, 不能因为
+     viewport 小就藏起来让用户漏掉) */
+  .topbar-status .chip-readonly { display: inline-flex; }
 }
 @media (max-width: 600px) {
   .chat-inner { padding: 0 12px; }
@@ -2905,6 +2908,19 @@ body.is-remote .btn-lan-toggle { display: none; }
   font-size: 12.5px;
   color: var(--text);
   z-index: 100;
+}
+/* v1.0.1: 移动端 sidebar 折叠时, sub-card 不能还按 248px 左边距定位 (会跑出屏幕)
+   fallback: 占满 viewport, 留 16px 边距 */
+@media (max-width: 600px) {
+  .lan-card {
+    left: 16px;
+    right: 16px;
+    width: auto;
+    bottom: 60px;
+    max-height: calc(100vh - 80px);
+  }
+  /* 折叠的 sidebar 状态下, 卡片不显示指向 sidebar 的三角箭头 (没意义) */
+  .lan-card::before { display: none; }
 }
 /* 小三角箭头指向 chip-lan (在卡片左下) */
 .lan-card::before {
