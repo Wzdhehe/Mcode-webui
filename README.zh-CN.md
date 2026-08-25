@@ -31,6 +31,19 @@
 - **工作区切换** —— 目录树浏览器（Windows 各盘符、Linux `/`）
 - **Token 鉴权的局域网共享** —— `0.0.0.0` 绑定，`?token=` 或
   `Authorization: Bearer` 两种方式，运行时可开关（关时返回 403 友好页）
+- **Token 鉴权：默认开启 (v1.0.1)** —— 首次启动未设置 `TOKEN` 环境变量时，
+  服务器自动生成一个 32 hex token，持久化到
+  `~/.mcode-webui/settings.json`，并在标准输出打印一次。配置卡片
+  展示 token 直到你点击 "我已保存" —— 之后再也不会从
+  `/api/settings` 响应里下发。设 `TOKEN` 环境变量可覆盖。
+- **Token 鉴权：重置 + 实时广播 (v1.0.1)** —— "重置 token" 按钮生成
+  新的 token，持久化，并通过 SSE 广播 `auth.token_rotated` 事件。
+  所有已连接的客户端自动更新 localStorage + `Authorization` 头
+  —— 无需重新加载。不在线的客户端下次访问会得到新的 URL。
+- **Token 鉴权：已确认状态 (v1.0.1)** —— 确认后，服务器不再在
+  `/api/settings` 响应里包含 `currentToken` 字段。UI 显示
+  "已保存" 占位文字。如要重新查看 token，必须点击 "重置 token"
+  （会生成新值）。状态跨重启持久化。
 - **移动端响应** —— `<900px` 抽屉式布局，`<600px` 单列
 - **双语界面** —— 英文 / 简体中文，即时切换
 - **单色主题** —— "Ink & Paper" 暗 / 亮双主题，跟随系统

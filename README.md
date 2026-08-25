@@ -31,6 +31,22 @@ Zero npm dependencies at runtime (Node 22+ stdlib only).
 - **Workspace switching** — directory-tree browser (Windows drives, `/`)
 - **Token-authed LAN sharing** — `0.0.0.0` bind, `?token=` or
   `Authorization: Bearer`, runtime on/off toggle with friendly 403 page
+- **Token auth: default-on (v1.0.1)** — on first start, the server
+  auto-generates a 32-hex token, persists it to
+  `~/.mcode-webui/settings.json`, and prints it to stdout once.
+  The settings card shows the token until you click
+  "我已保存 / I have saved it" — after that the server stops
+  sending it over `/api/settings`. Set `TOKEN` env to override.
+- **Token auth: reset + live broadcast (v1.0.1)** — "重置 token"
+  button generates a new value, persists it, and broadcasts
+  `auth.token_rotated` over SSE. All connected clients update their
+  `localStorage` + `Authorization` header **in place** — no reload
+  required. Offline clients get a fresh URL on their next visit.
+- **Token auth: acknowledged state (v1.0.1)** — after acknowledging,
+  the server stops including `currentToken` in `/api/settings`
+  responses. The UI shows a "Saved" placeholder. To view the
+  token again you must hit "Reset token" (which produces a new
+  value). Persisted across restarts.
 - **Mobile responsive** — `<900px` drawers, `<600px` single column
 - **Bilingual UI** — English / 简体中文, instant toggle
 - **Monochrome theme** — "Ink & Paper" dark / light, follows system

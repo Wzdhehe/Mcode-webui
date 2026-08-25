@@ -52,6 +52,110 @@ landed on the development branch but are not yet cut into a release.
 - No personal data committed (no IPs, usernames, real session
   IDs in any tracked file)
 
+## v1.0.1 (2026-08-25) — LAN access security controls
+
+> Scope: address PR #16 reviewer feedback that `SECURITY-NOTES.md §2`
+> documents `?token=` / `Authorization: Bearer` but the code had no
+> real auth gate. v1.0.1 implements the actual auth + adds a
+> secondary card under the LAN chip to manage it, plus a few related
+> hardening fixes. **No breaking changes to existing endpoints**
+> (loopback behaviour, LAN toggle, and existing routes are
+> preserved byte-identically).
+>
+> **Token auth itself is the headline change** — see the three
+> dedicated sub-sections below. The other v1.0.1 features (read-only
+> mode, sub-card UI, top-bar chip, bilingual reject page) are listed
+> under "Other additions" for completeness.
+
+### Token auth: default-on
+
+- On first start with no `TOKEN` env set, the server now
+  **auto-generates a 32-hex-char token** (`crypto.randomBytes(16)
+  .toString('hex')`), persists it to
+  `~/.mcode-webui/settings.json` (mode `0600` on Unix; best-effort
+  on Windows), and **prints it to stdout exactly once** (never to
+  `.server.log` — the operator is expected to copy it from the
+  console or the settings file before it scrolls off).
+- The settings card in the bottom-left sub-card shows the token
+  in cleartext on first open, with "我已保存 / I have saved it"
+  next to it. Until that button is clicked, `GET /api/settings`
+  and the SSE state push keep including the `currentToken` field.
+- The `TOKEN` env var (when set) still wins over the auto-generated
+  token — the env path is unchanged, this is purely additive.
+- `MCODE_WEBUI_SETTINGS_PATH` env var overrides the settings file
+  location (test / non-default-install use cases).
+
+### Token auth: reset + live broadcast
+
+- The settings card has a "重置 token / Reset token" button. Click
+  it → confirm → server generates a new 32-hex token, persists
+  it, **broadcasts an `auth.token_rotated` SSE event** with the
+  new value to every connected client, and resets
+  `tokenAcknowledged` back to `false` so the new token is shown
+  in the settings card.
+- Each client that receives `auth.token_rotated` updates its
+  `localStorage` (`webui_token` key) and the live `HEADERS.
+  Authorization` object **in place** — subsequent `fetch()` calls
+  use the new token automatically. No reload required.
+- Clients that were offline when rotation happened will get
+  `401` on their next request, at which point they need to be
+  re-sent the new URL (with `?token=`) manually.
+- `rotateToken` is **crash-safe**: persists to disk first, then
+  commits the in-memory token. If disk write fails, in-memory
+  state is rolled back and the API returns `500`.
+
+### Token auth: acknowledged state machine
+
+- After clicking "我已保存 / I have saved it" in the settings
+  card, the server records `tokenAcknowledged=true` and
+  **stops including `currentToken` in subsequent
+  `GET /api/settings` responses and SSE state pushes**.
+- The UI replaces the value/mask row with a `✓ 已保存 — 查看请点
+  "重置" / Saved — click "Reset" to view again` placeholder.
+  The "show / copy" buttons disappear (nothing to show / copy).
+- To view the token again, the operator must hit "Reset token"
+  (which produces a new value and a new broadcast). The
+  acknowledged flag prevents accidental token disclosure in
+  /api/settings responses if a stale client or external monitor
+  is scraping the endpoint.
+- The state is persisted to `~/.mcode-webui/settings.json`
+  alongside the token itself, so the acknowledged flag survives
+  server restarts.
+
+### Other additions
+
+- **Read-only mode** — sub-card toggle. When on, non-local
+  `POST` / `DELETE` to `/api/*` return `403 {"error": "read-only
+  mode"}`. `GET` / `HEAD` / `OPTIONS` are exempt. Local requests
+  always exempt. `/api/settings` exempt (escape hatch). Persisted.
+- **Top-bar read-only chip** — when read-only is on, a red
+  pulsing "只读 / READ ONLY" chip appears in the top bar. Visible
+  to all clients (loopback and remote), including on mobile
+  (`max-width: 600px` keeps it visible when the rest of the
+  top-bar status group is hidden).
+- **Sub-card under the LAN chip** — a secondary floating card
+  (not inline; positions itself to the right of the sidebar, full-
+  width on mobile) that consolidates the LAN broadcast toggle,
+  read-only toggle, token auth toggle, token view/copy/reset/
+  acknowledge, and the `lanUrlWithToken` shareable URL.
+- **Bilingual single-page LAN reject** — the 403 HTML now shows
+  both Chinese and English stacked (not Accept-Language switching,
+  per user feedback). The `127.0.0.1:PORT/` URL uses the dynamic
+  `PORT` constant, not a hardcoded `7890`.
+- **`lanUrlWithToken` in `GET /api/settings`** — for convenience
+  the top-bar LAN chip now copies a complete shareable URL
+  (`http://<lan-ip>:8080/?token=<token>`) to the clipboard when
+  clicked. The top-bar text still shows just the host:port
+  (token never appears in top-bar text).
+
+### Verified
+
+- `npm test` — 372/372 pass
+- `npm run lint` — 0 warnings
+- Independent verifier audit (security + feature + regression) — passed
+  with 1 IMPORTANT mobile-visibility fix landed in `7c9dbe3`
+- Token not logged to `.server.log` (verified via grep on audit run)
+
 ## v1.0.0 (2026-08-22) — First public release
 
 > Scope: visual redesign, several silent-bug fixes, delete-coverage

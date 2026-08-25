@@ -146,8 +146,13 @@ Anything outside these three is either ❌ blocked (no workaround) or
 |---|---|---|
 | HTTP server | ✅ | Node `http.createServer` |
 | LAN sharing with on/off toggle | ✅ | runtime state in `settings.lanBroadcastEnabled`; closed by default for non-local IPs |
-| Friendly 403 page when LAN is off | ✅ | `LAN_REJECT_HTML` template in `settings.js` |
+| Friendly 403 page when LAN is off | ✅ | `LAN_REJECT_HTML` template in `settings.js`; v1.0.1: single bilingual page (zh + en stacked), dynamic `PORT` (was hardcoded `7890` which broke at v0.5 default change) |
 | Token auth (`?token=` or `Authorization: Bearer`) | ✅ | `server.js` validates `req.url` and `req.headers.authorization`; if set, every request must include the token |
+| **Token auth: default-on (v1.0.1)** | ✅ | First start with no `TOKEN` env auto-generates a 32-hex token, persists to `~/.mcode-webui/settings.json` (mode 0600, atomic write via `.tmp` + rename), and prints it to **stdout exactly once** (never to `.server.log`). The settings card shows the token until the operator clicks "我已保存 / I have saved it". `MCODE_WEBUI_SETTINGS_PATH` env overrides the file location. `TOKEN` env still wins (escape hatch). |
+| **Token auth: reset + live broadcast (v1.0.1)** | ✅ | "重置 token" button generates a new 32-hex value, persists it, and broadcasts an `auth.token_rotated` SSE event with the new token. Each connected client updates its `localStorage` and the live `HEADERS.Authorization` object **in place** — subsequent `fetch()` calls use the new token automatically, no reload required. Crash-safe: disk write first, in-memory state committed only on success. |
+| **Token auth: acknowledged state machine (v1.0.1)** | ✅ | After "我已保存", the server records `tokenAcknowledged=true` and stops including `currentToken` in subsequent `GET /api/settings` responses and SSE state pushes. UI replaces the value/mask row with a `✓ 已保存 — 查看请点"重置" / Saved — click "Reset" to view again` placeholder. Resetting triggers a new rotation. Persisted across restarts. |
+| **Token auth: settings persistence (v1.0.1)** | ✅ | Token + readOnly + tokenEnabled + tokenAcknowledged + tokenRotatedAt + allowedInterfaces (no-op stub) all persist to `~/.mcode-webui/settings.json`. `lanBroadcast` remains in-memory only (intentional — reboot re-enables LAN so admins don't get locked out). |
+| Read-only mode (v1.0.1) | ✅ | When on, non-local `POST` / `DELETE` to `/api/*` return `403 {"error": "read-only mode"}`. `GET` / `HEAD` / `OPTIONS` exempt. Local requests always exempt. `/api/settings` exempt (escape hatch). Persisted. Top-bar shows a red pulsing "只读 / READ ONLY" chip when on. |
 | Per-cid SSE channel | ✅ | one EventSource per browser tab; one mcode subprocess per cid |
 | HTTPS | ❌ | would need a reverse proxy (nginx, caddy). Documented in the README. |
 | mTLS / client cert | ❌ | same as above |
