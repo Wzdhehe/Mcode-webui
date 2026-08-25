@@ -100,32 +100,36 @@ describe("settings — rejectLan", () => {
     assert.match(body.error, /LAN/);
   });
 
-  test("returns true and writes HTML 403 for non-API paths (browser request, zh)", () => {
+  test("returns true and writes HTML 403 for non-API paths (single bilingual page)", () => {
     settings.setLanBroadcast(false);
     const res = fakeRes();
-    const rejected = settings.rejectLan(res, "/", "192.168.1.100", "zh-CN,zh;q=0.9,en;q=0.8");
+    const rejected = settings.rejectLan(res, "/", "192.168.1.100");
     assert.equal(rejected, true);
     assert.equal(res._status, 403);
     assert.ok(res._isHtml, "non-API path should return HTML");
-    assert.match(res._body, /局域网访问已关闭/);
-    assert.match(res._body, /192\.168\.1\.100/); // remote IP embedded in the page
+    // Single page contains BOTH languages (not Accept-Language switching)
+    assert.match(res._body, /局域网访问已关闭/); // zh title
+    assert.match(res._body, /LAN access disabled/); // en title
+    assert.match(res._body, /192\.168\.1\.100/); // remote IP
   });
 
-  test("returns English HTML when Accept-Language is English", () => {
+  test("HTML page uses dynamic PORT (not hardcoded 7890)", () => {
     settings.setLanBroadcast(false);
     const res = fakeRes();
-    settings.rejectLan(res, "/", "192.168.1.100", "en-US,en;q=0.9");
-    assert.match(res._body, /LAN access disabled/);
-    assert.match(res._body, /192\.168\.1\.100/);
-  });
-
-  test("HTML page mentions dynamic PORT (not hardcoded 7890)", () => {
-    settings.setLanBroadcast(false);
-    const res = fakeRes();
-    settings.rejectLan(res, "/some/page", "10.0.0.1", "en-US,en;q=0.9");
-    // v1.0.1: was hardcoded 7890 — now uses dynamic PORT (default 8080)
+    settings.rejectLan(res, "/some/page", "10.0.0.1");
     assert.match(res._body, /127\.0\.0\.1:8080/);
     assert.doesNotMatch(res._body, /7890/);
+  });
+
+  test("JSON 403 body is bilingual (API callers)", () => {
+    settings.setLanBroadcast(false);
+    const res = fakeRes();
+    settings.rejectLan(res, "/api/anything", "203.0.113.5");
+    assert.equal(res._status, 403);
+    const body = JSON.parse(res._body);
+    assert.equal(body.ok, false);
+    assert.match(body.error, /LAN access disabled/);
+    assert.match(body.error, /局域网/);
   });
 });
 

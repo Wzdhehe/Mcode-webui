@@ -156,6 +156,10 @@ const I18N = {
     ask_user_no_options_hint: '无预设选项 — 用下方"其他"输入回答',
     ask_user_send_count: '发送 ({n} 题)',
     ask_user_resend_count: '已答完 ({n} 题, 点重发)',
+    // v1.0.1: 顶栏只读模式 chip (双语)
+    topbar_readonly_zh: '只读',
+    topbar_readonly_en: 'READ ONLY',
+    topbar_readonly_title: 'webui 当前处于只读模式 (远程客户端不能发送/删除)',
     // v1.0.1: 二级 LAN 卡片 (sub-card) — 只读/Token 鉴权/接口过滤
     lan_card_title: '局域网安全设置',
     lan_card_readonly: '只读模式',
@@ -319,6 +323,10 @@ const I18N = {
     ask_user_no_options_hint: 'No preset options — type in "Other" below',
     ask_user_send_count: 'Send ({n} questions)',
     ask_user_resend_count: 'Answered ({n} questions, click to resend)',
+    // v1.0.1: Top-bar read-only chip (bilingual)
+    topbar_readonly_zh: '只读',
+    topbar_readonly_en: 'READ ONLY',
+    topbar_readonly_title: 'webui is in read-only mode (remote clients cannot send or delete)',
     // v1.0.1: Secondary LAN card (sub-card) — read-only / token auth / interface filter
     lan_card_title: 'LAN Security',
     lan_card_readonly: 'Read-only mode',

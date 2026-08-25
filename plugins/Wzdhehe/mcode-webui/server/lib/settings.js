@@ -373,74 +373,64 @@ export function rotateToken() {
 
 // -----------------------------------------------------------------------
 // LAN reject page
-// v1.0.1: bilingual (Accept-Language header), dynamic PORT (was hardcoded
-//   7890 which broke when PORT was changed to 8080 default), dynamic
-//   `lanUrl` (so the page shows the actual URL to open, not 127.0.0.1).
+// v1.0.1: SINGLE bilingual page (zh + en side-by-side) — not Accept-Language
+//   switching. Per user feedback: a user on a Chinese host might be
+//   browsing in English (or vice versa); they want both visible at once.
+//   Dynamic PORT (was hardcoded 7890 which broke when PORT was changed
+//   to 8080 default).
 // -----------------------------------------------------------------------
 
-// _isZh — naive Accept-Language parser. Returns true if the first
-// language tag starts with "zh" (covers zh-CN, zh-TW, zh-HK, zh).
-// Otherwise returns false → English.
-function _isZh(acceptLanguage) {
-  if (!acceptLanguage) return false;
-  const first = String(acceptLanguage).split(",")[0].trim().toLowerCase();
-  return first.startsWith("zh");
-}
-
-const LAN_REJECT_HTML_ZH = (
+// Single bilingual HTML — both languages always visible. Each block is
+// `zh` then `en` separated by a thin divider. No Accept-Language sniffing.
+const LAN_REJECT_HTML = (
   remoteIp,
   localUrl,
-) => `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>webui — 局域网访问已关闭</title>
+) => `<!DOCTYPE html><html><head><meta charset="utf-8"><title>webui — LAN access disabled / 局域网访问已关闭</title>
 <style>
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 560px; margin: 80px auto; padding: 24px; color: #333; line-height: 1.6; }
-h1 { color: #c0392b; margin-top: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 640px; margin: 80px auto; padding: 24px; color: #333; line-height: 1.6; }
+h1 { color: #c0392b; margin-top: 0; font-size: 22px; }
 code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 14px; word-break: break-all; }
 .box { background: #fef9e7; border-left: 4px solid #f1c40f; padding: 14px 18px; border-radius: 4px; margin: 20px 0; }
+.lang { display: block; }
+.lang + .lang { margin-top: 12px; padding-top: 12px; border-top: 1px dashed #ddd; }
+.tag { display: inline-block; font-size: 10px; font-weight: 700; color: #888; background: #eee; padding: 1px 6px; border-radius: 3px; margin-bottom: 4px; letter-spacing: 0.5px; }
 </style></head><body>
+
+<span class="lang"><span class="tag">ZH</span>
 <h1>🚫 局域网访问已关闭</h1>
 <p>本 webui 当前<strong>仅允许本机访问</strong>，你的设备（<code>${remoteIp || "远程"}</code>）不在白名单内。</p>
 <div class="box"><strong>如何开启：</strong><br>在 webui 所在的电脑上打开 <code>${localUrl}</code> → 左下角"局域网访问"按钮 → 开启</div>
 <p>或直接用本机 URL：<code>${localUrl}</code></p>
-</body></html>`;
+</span>
 
-const LAN_REJECT_HTML_EN = (
-  remoteIp,
-  localUrl,
-) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>webui — LAN access disabled</title>
-<style>
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 560px; margin: 80px auto; padding: 24px; color: #333; line-height: 1.6; }
-h1 { color: #c0392b; margin-top: 0; }
-code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 14px; word-break: break-all; }
-.box { background: #fef9e7; border-left: 4px solid #f1c40f; padding: 14px 18px; border-radius: 4px; margin: 20px 0; }
-</style></head><body>
+<span class="lang"><span class="tag">EN</span>
 <h1>🚫 LAN access disabled</h1>
 <p>webui is currently <strong>loopback-only</strong>. Your device (<code>${remoteIp || "remote"}</code>) is not in the allowlist.</p>
 <div class="box"><strong>How to enable:</strong><br>On the host machine, open <code>${localUrl}</code> → click the "LAN access" button at the bottom-left → turn it on</div>
 <p>Or use the local URL directly: <code>${localUrl}</code></p>
+</span>
+
 </body></html>`;
 
-const LAN_REJECT_JSON_ZH = {
+const LAN_REJECT_JSON = {
   ok: false,
-  error: "LAN 访问已关闭。在本机打开设置开启。",
-};
-const LAN_REJECT_JSON_EN = {
-  ok: false,
-  error: "LAN access disabled. Open settings on the host machine to enable.",
+  error: "LAN access disabled. Open settings on the host machine to enable. / 局域网访问已关闭。在本机打开设置开启。",
 };
 
-export function rejectLan(res, pathname, remoteIp, acceptLanguage) {
+export function rejectLan(res, pathname, remoteIp, _acceptLanguage) {
+  // _acceptLanguage kept for back-compat with router.js's call site,
+  // but no longer used — the page is now always bilingual.
   const isApi = pathname.startsWith("/api/");
   const isSettings = pathname === "/api/settings"; // 让用户能远程切回
   if (isSettings) return false;
   const localUrl = `http://127.0.0.1:${PORT}/`;
-  const zh = _isZh(acceptLanguage);
   if (isApi) {
     res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify(zh ? LAN_REJECT_JSON_ZH : LAN_REJECT_JSON_EN));
+    res.end(JSON.stringify(LAN_REJECT_JSON));
     return true;
   }
   res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
-  res.end(zh ? LAN_REJECT_HTML_ZH(remoteIp, localUrl) : LAN_REJECT_HTML_EN(remoteIp, localUrl));
+  res.end(LAN_REJECT_HTML(remoteIp, localUrl));
   return true;
 }
 

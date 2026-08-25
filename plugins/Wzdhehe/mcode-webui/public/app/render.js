@@ -75,6 +75,13 @@ export function render() {
     chipOnline.querySelector('#chip-online-text').textContent = onlineText
   }
 
+  // v1.0.1: 只读模式 top-bar chip — 醒目的红色双语 chip, server readOnly=true
+  // 时所有 client (包括本机) 都看得到, 远程 client 一眼就知道现在不能 send / delete
+  const chipReadonly = document.getElementById('chip-readonly')
+  if (chipReadonly) {
+    chipReadonly.hidden = !(state && state.readOnly === true)
+  }
+
   // v0.5.aa: chat 底部思考中指示器 + send 按钮 → stop 按钮
   const isRunning = state.running?.active === true
   const chatThinkingEl = document.getElementById('chat-thinking')
