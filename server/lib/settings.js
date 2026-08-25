@@ -397,14 +397,14 @@ code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 14p
 </style></head><body>
 
 <span class="lang"><span class="tag">ZH</span>
-<h1>🚫 局域网访问已关闭</h1>
+<h1>局域网访问已关闭</h1>
 <p>本 webui 当前<strong>仅允许本机访问</strong>，你的设备（<code>${remoteIp || "远程"}</code>）不在白名单内。</p>
 <div class="box"><strong>如何开启：</strong><br>在 webui 所在的电脑上打开 <code>${localUrl}</code> → 左下角"局域网访问"按钮 → 开启</div>
 <p>或直接用本机 URL：<code>${localUrl}</code></p>
 </span>
 
 <span class="lang"><span class="tag">EN</span>
-<h1>🚫 LAN access disabled</h1>
+<h1>LAN access disabled</h1>
 <p>webui is currently <strong>loopback-only</strong>. Your device (<code>${remoteIp || "remote"}</code>) is not in the allowlist.</p>
 <div class="box"><strong>How to enable:</strong><br>On the host machine, open <code>${localUrl}</code> → click the "LAN access" button at the bottom-left → turn it on</div>
 <p>Or use the local URL directly: <code>${localUrl}</code></p>

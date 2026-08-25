@@ -292,7 +292,7 @@ a.chip-lan-link .icon {
 .chip-workspace:hover { background: var(--bg-hover, rgba(0,0,0,0.04)); border-color: var(--accent); }
 .chip-workspace:active { background: var(--bg-active, rgba(0,0,0,0.08)); }
 .chip-workspace-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* v1.0.1: 只读模式 chip — 红色背景 + 白字 + 眼睛图标, 双语 ("只读 / READ ONLY")
+/* v1.0.1: 只读模式 chip — 红色背景 + 白字, 双语 ("只读 / READ ONLY")
    醒目的视觉提示, 让任何 client (本机 / 远程) 都能一眼看到当前
    webui 处于只读模式. */
 .chip-readonly {
@@ -303,7 +303,6 @@ a.chip-lan-link .icon {
   letter-spacing: 0.3px;
   animation: pulse-readonly 2.4s ease-in-out infinite;
 }
-.chip-readonly .icon { width: 14px; height: 14px; }
 .chip-readonly-sep {
   opacity: 0.6;
   font-weight: 400;
