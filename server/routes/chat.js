@@ -9,7 +9,7 @@ import {
   saveSessions,
   persistCurrentChat,
 } from "../lib/sessions.js";
-import { pushStateFor, getActiveChild } from "../lib/state-bus.js";
+import { pushStateFor, getActiveChild, GOAL_STATUSES } from "../lib/state-bus.js";
 import { handleLocalSlash, handleCmdCommand } from "../lib/slash.js";
 import { runMcodeAcp } from "../lib/mcode-acp.js";
 import { collectExecResult, runMcodeExec } from "../lib/mcode-exec.js";
@@ -427,5 +427,143 @@ export async function handleSetConfigOption(req, res, ctx) {
     res.end(JSON.stringify({ ok: false, error: e.message }));
   } finally {
     client.stop();
+  }
+}
+
+// v1.0.2 Round 6: Goal 4 个 endpoint
+//   POST /api/chat/goal        body: { objective, tokenBudget? }  → 创建
+//   PATCH /api/chat/goal       body: { status?, objective?, tokenBudget? }  → 改
+//   DELETE /api/chat/goal      body: {}  → 清空
+//   GET /api/chat/goal         返回当前 goal
+// 5 状态 enum (state-bus.GOAL_STATUSES) 校验 status 输入
+
+async function withMcodeSession(cs, fn) {
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    return await fn(client);
+  } finally {
+    client.stop();
+  }
+}
+
+// POST /api/chat/goal — 创建
+export async function handleGoalCreate(req, res, ctx) {
+  const cs = ctx.cs;
+  const cid = ctx.cid;
+  const payload = await readJson(req);
+  const objective = (payload.objective || "").trim();
+  const tokenBudget = payload.tokenBudget;
+  if (!objective) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "objective required" }));
+  }
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "no active mcode session" }));
+  }
+  try {
+    const r = await withMcodeSession(cs, (client) =>
+      client.goalCreate(cs.mcodeSessionId, objective, tokenBudget),
+    );
+    // r 是 { goal: {...} } 形式, 取出 goal
+    const goal = r && r.goal ? r.goal : r;
+    // 立即 broadcast 给同 session 的所有 cid
+    const { broadcastGoalUpdate } = await import("../lib/state-bus.js");
+    broadcastGoalUpdate(cid, goal);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, goal }));
+  } catch (e) {
+    console.warn(`[chat.goal.create] cid=${cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  }
+}
+
+// PATCH /api/chat/goal — 改 status / objective / tokenBudget
+export async function handleGoalPatch(req, res, ctx) {
+  const cs = ctx.cs;
+  const cid = ctx.cid;
+  const payload = await readJson(req);
+  const fields = {};
+  if (payload.status !== undefined) {
+    if (!GOAL_STATUSES.has(payload.status)) {
+      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+      return res.end(JSON.stringify({
+        ok: false,
+        error: `status must be one of ${[...GOAL_STATUSES].join(", ")}`,
+      }));
+    }
+    fields.status = payload.status;
+  }
+  if (payload.objective !== undefined) fields.objective = String(payload.objective).trim();
+  if (payload.tokenBudget !== undefined) fields.tokenBudget = payload.tokenBudget;
+  if (Object.keys(fields).length === 0) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "no fields to patch" }));
+  }
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "no active mcode session" }));
+  }
+  try {
+    const r = await withMcodeSession(cs, (client) =>
+      client.goalPatch(cs.mcodeSessionId, fields),
+    );
+    const goal = r && r.goal ? r.goal : r;
+    const { broadcastGoalUpdate } = await import("../lib/state-bus.js");
+    broadcastGoalUpdate(cid, goal);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, goal }));
+  } catch (e) {
+    console.warn(`[chat.goal.patch] cid=${cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  }
+}
+
+// DELETE /api/chat/goal — 清空
+export async function handleGoalClear(req, res, ctx) {
+  const cs = ctx.cs;
+  const cid = ctx.cid;
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "no active mcode session" }));
+  }
+  try {
+    await withMcodeSession(cs, (client) =>
+      client.goalClear(cs.mcodeSessionId),
+    );
+    // 清空时 cs.goalBudget 设为 null
+    const { broadcastGoalUpdate } = await import("../lib/state-bus.js");
+    broadcastGoalUpdate(cid, null);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, cleared: true }));
+  } catch (e) {
+    console.warn(`[chat.goal.clear] cid=${cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  }
+}
+
+// GET /api/chat/goal — 拿当前 goal
+export async function handleGoalGet(req, res, ctx) {
+  const cs = ctx.cs;
+  if (!cs.mcodeSessionId) {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: true, goal: null, reason: "no active mcode session" }));
+  }
+  try {
+    const r = await withMcodeSession(cs, (client) =>
+      client.goalGet(cs.mcodeSessionId),
+    );
+    const goal = r && r.goal !== undefined ? r.goal : r;
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, goal: goal || null }));
+  } catch (e) {
+    console.warn(`[chat.goal.get] cid=${ctx.cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
   }
 }

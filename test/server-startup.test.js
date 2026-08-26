@@ -19,11 +19,14 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const serverJsPath = join(__dirname, "..", "server.js");
+// v1.0.2 Round 6: 用 PORT=8090 避免跟开发 server (8080) 冲突
+const TEST_PORT = process.env.TEST_PORT || "8090";
 
 test("server.js bootstrap does not throw ESM load-time error", async () => {
   const proc = spawn("node", [serverJsPath], {
     stdio: ["ignore", "pipe", "pipe"],
     cwd: join(__dirname, ".."),
+    env: { ...process.env, PORT: TEST_PORT },
   });
 
   let stderr = "";
