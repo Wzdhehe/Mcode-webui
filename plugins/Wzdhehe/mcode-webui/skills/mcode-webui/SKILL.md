@@ -35,7 +35,7 @@ the mcode agent runtime, or anything not about the webui HTTP/SSE server.
 
 ## Capabilities
 
-13 capabilities, all implemented and live in v1.0:
+18 capabilities, all implemented and live in v1.0.2:
 
 - **chat-streaming** — SSE-delivered streamed model output
 - **tool-execution** — bash / edit / read tool events shown inline
@@ -50,6 +50,11 @@ the mcode agent runtime, or anything not about the webui HTTP/SSE server.
 - **lan-sharing** — `0.0.0.0` bind, optional `TOKEN` auth
 - **token-auth** — `?token=` query + `Authorization: Bearer` header
 - **mobile-responsive** — viewport + touch gestures
+- **v1.0.2 session-fork** (mcode 0.2.4+) — `session/fork` RPC, 从指定消息分叉新会话
+- **v1.0.2 session-queue** (mcode 0.2.4+) — `session/queue` RPC, LLM 响应中可排队/改写/删除消息
+- **v1.0.2 session-steering** (mcode 0.2.4+) — `session/steer` RPC, 引导当前 turn 不打断
+- **v1.0.2 session-resume** (mcode 0.2.4+) — `session/resume` RPC, 接续历史 session (Ctrl+U 走 Round 7)
+- **v1.0.2 mode-switch** (mcode 0.2.4+) — `session/set_mode` + `session/set_config_option` RPC, 切 plan/permission/model
 
 ## Configuration (Environment Variables)
 

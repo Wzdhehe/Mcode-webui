@@ -49,6 +49,10 @@
 - **单色主题** —— "Ink & Paper" 暗 / 亮双主题，跟随系统
 - **两种传输** —— `mcode acp`（默认，多轮）+ `mcode exec`
   兜底（用于老版本客户端 / 降级模式）
+- **会话控制 (v1.0.2, mcode 0.2.4+)** —— fork (从指定消息分叉新会话)、
+  queue (LLM 响应中排队新消息)、steer (引导当前 turn 不打断)、
+  resume (接续最近 mcode session)、mode switch (切 plan / permission / model) —
+  10 个新 acp RPC + 4 个新 sessionUpdate 通知 + 8 条新 webui 路由 + 完整 UI
 
 ## 快速开始
 

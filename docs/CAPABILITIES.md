@@ -174,9 +174,9 @@ Anything outside these three is either ❌ blocked (no workaround) or
 
 ## 13. What mcode would need to add to enable the ❌ rows
 
-- `set_mode` / `set_config_option` → mid-session permission switch in the UI
-- `cancel` → true mid-flight cancellation, not just SIGTERM
-- `fork` / `resume` / `rewind` → rewind/regenerate UI
+- `set_mode` / `set_config_option` → mid-session permission switch in the UI *(mcode 0.2.4 已实现, 见 §14)*
+- `cancel` → true mid-flight cancellation, not just SIGTERM *(mcode 0.2.4 已实现, 见 §14)*
+- `fork` / `resume` / `rewind` → rewind/regenerate UI *(mcode 0.2.4 已实现 fork/resume, 见 §14)*
 - `request_permission` with structured rules → per-tool whitelist
 - `session/message.delete` → "edit and resend"
 - `session/export` → export to MD/JSON
@@ -187,3 +187,57 @@ Anything outside these three is either ❌ blocked (no workaround) or
 
 These are upstream asks. See [docs/acp-goal-plan-status.md](acp-goal-plan-status.md)
 for the historical list and the response from the mcode team.
+
+## 14. v1.0.2 — mcode 0.2.4 control surface 适配
+
+> 适配目标: mcode TUI 0.2.4 (2026-08-24) 新增的 Session 控制面。
+> **硬性要求**: webui v1.0.2 需要 mcode >= 0.2.4。启动时版本检查 fail-fast。
+
+### 14.1 Session control RPC 适配 (5 个新方法)
+
+| mcode 0.2.4 acp 方法 | webui 路由 | 功能 | UI 体现 |
+|---|---|---|---|
+| `session/cancel` | `POST /api/stop` (已有) | 温和取消当前 turn, 走 finalize 不杀 mcode 进程 | 发送按钮变 stop 按钮, 取消后变回发送 |
+| `session/fork` | `POST /api/sessions/fork` | 从指定 messageId 分叉新会话 | 每条 user message 右下角 fork 按钮 (hover) |
+| `session/queue` | `POST /api/chat/queue` | LLM 响应中追加新消息 (排队) | queue badge 出现在 composer 上方, 显示"X 排队中" |
+| `session/queue/update` | `POST /api/chat/queue/update` | 改写队列里某条消息 | queue list 展开, 队列项可点编辑 |
+| `session/queue/delete` | `POST /api/chat/queue/delete` | 从队列删一条 | queue list 队列项删除按钮 |
+| `session/queue/steer` | — | 队列项触发 steer (改当前 turn 方向) | (Round 5 留接口, UI 在 Round 6) |
+| `session/steer` | `POST /api/chat/steer` | 引导当前 turn 不打断 | 顶栏 ↪ Steer 按钮 (LLM 响应中可见) |
+| `session/resume` | `POST /api/sessions/resume` | 接续 mcode session (重载 transcript) | Round 7 加 Ctrl+U 快捷键 |
+| `session/set_mode` | `POST /api/chat/mode` | 切 session 模式 (plan / default / acceptEdits / bypassPermissions) | 恢复 `btn-mode` 按钮 (之前 v0.5.by 隐藏, 现接通) |
+| `session/set_config_option` | `POST /api/chat/config-option` | 改 session config (e.g. model 切换) | 恢复 `btn-model` 按钮 (同上) |
+
+### 14.2 新通知事件 (4 个, server→client)
+
+- `session/queue_update` — 队列状态变化 (mcode 在消息加入/改写/删除时推)
+- `session/goal_update` — Goal 状态变化 (5 状态枚举: `active | paused | blocked | complete | budget_limited`)
+- `session/delegation_update` — Delegation 状态变化 (Round 6 接入)
+- `session/current_session_update` — 当前 session 切换通知 (resume / switch 触发)
+
+### 14.3 Goal (Round 6 基础已就位)
+
+- 5 状态枚举从 cli.js bundle grep 验证
+- `cs.goalBudget = { used, total, status }` 字段已加, Round 6 加 chat 顶部 progress bar
+- mcode-acp.js `goal_update` handler 同时支持新 shape (`used`/`total`/`status`) 和旧 shape (`active`/`text`/`duration`), 向后兼容
+
+### 14.4 Delegation (Round 6 基础已就位)
+
+- `cs.activeDelegations = []` 数组已加
+- Round 6 加 chat 顶部 delegation card (子任务快照)
+
+### 14.5 不做的功能 (Round 7 计划 / Round 8 体验改进)
+
+- **Hook observer** (Round 7) — mcode 0.2.4 引入 lifecycle Hooks, webui 只观察不实现引擎
+- **Plugin Skills** (Round 7) — `/` palette 合并 mcode 推过来的 plugin skills
+- **Ctrl+U** (Round 7) — 调 `session/resume` 接续最近 session
+- **Server loading 状态** (Round 8) — 启动阶段 banner, Runtime 就绪前禁用 send
+- **Image path paste** (Round 8) — 绝对路径 → 简短占位符
+- **背景任务去重** (Round 8) — 等 mcode acp 任务生命周期事件验证
+
+### 14.6 关键决策
+
+- **PR 策略**: 追加到 PR #16 (用户决策), 不开新 PR。Reviewer 看 PR body 评论区分 v1.0.1 baseline / v1.0.2 新增。
+- **旧 mcode 兼容**: 不考虑, 只适配 0.2.4。启动时检测 + fail-fast。
+- **Hook 范围**: 只观察 (用户决策), 不存 webui 自己的 hook 配置。
+- **进度文档**: `docs/PROGRESS.md` (用户新要求) 跟踪 Round 5/6/7/8。

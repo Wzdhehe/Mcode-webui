@@ -52,6 +52,10 @@ Zero npm dependencies at runtime (Node 22+ stdlib only).
 - **Monochrome theme** — "Ink & Paper" dark / light, follows system
 - **Two transports** — `mcode acp` (default, multi-turn) with
   `mcode exec` fallback for old clients / degraded mode
+- **Session control (v1.0.2, mcode 0.2.4+)** — fork (从指定消息分叉),
+  queue (LLM 响应中排队), steer (引导当前 turn), resume (接续最近),
+  mode switch (plan/permission/model) — 10 个新 acp RPC + 4 个新
+  sessionUpdate 通知 + 8 条新 webui 路由
 
 ## Quick start
 

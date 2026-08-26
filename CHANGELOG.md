@@ -52,6 +52,35 @@ landed on the development branch but are not yet cut into a release.
 - No personal data committed (no IPs, usernames, real session
   IDs in any tracked file)
 
+## v1.0.2 (2026-08-26) — mcode 0.2.4 control surface 适配
+
+> 适配 mcode TUI 0.2.4 (2026-08-24) 新增的 Session 控制面。
+> **硬性要求**: webui v1.0.2 需要 mcode >= 0.2.4。旧 mcode 启动时直接 fail-fast + 清晰错误信息, 不做 graceful degrade (用户决策)。
+>
+> 上游 PR: PR #16 (Round 1-4 v1.0.1 baseline + Round 5 v1.0.2 新增, 同一 PR 追加, 不开新 PR)
+
+### Added
+
+- **Session control 面适配** (mcode 0.2.4 acp 真实方法名, 来自 cli.js bundle grep 验证):
+  - `session/cancel` RPC 包装 + `handleStop` 优先温和取消 (替代 hard kill)
+  - `session/fork` RPC + `POST /api/sessions/fork` 路由 (从指定消息分叉)
+  - `session/queue` + `session/queue/update`/`delete`/`steer` RPC + queue badge UI (LLM 响应中可排队/改写/删除)
+  - `session/steer` RPC + 顶栏 Steer 按钮 (引导当前 turn 不打断)
+  - `session/resume` RPC + `POST /api/sessions/resume` 路由 (Ctrl+U 接续, Round 7)
+  - `session/set_mode` + `session/set_config_option` RPC + 恢复 `btn-mode` 和 `btn-model` 隐藏的按钮
+- **Goal 字段 (Round 6 基础)**: 5 状态枚举 (`active`/`paused`/`blocked`/`complete`/`budget_limited`), `cs.goalBudget = { used, total, status }`
+- **Delegation 字段 (Round 6 基础)**: `cs.activeDelegations` 数组
+- **6 个新 cs 字段** + **6 个 broadcast 函数** + **4 个新 sessionUpdate 事件** (queue_update / goal_update / delegation_update / current_session_update)
+- **`docs/PROGRESS.md`** (用户决策新增) — 跟踪 Round 5/6/7/8 进度 + 未来计划
+- **23 个新单测** (state-bus 7 / routes 10 / acp RPC 4 / version check 3, 含 doc-vs-code audit 修复)
+
+### Changed
+
+- **`handleStop`**: 旧实现永远 hard kill (`child.kill()`), mcode 0.1.5 acp 不支持 `session/cancel` (probe 实测 "Method not found")。新实现 mcode 0.2.4 真正支持温和取消 — 优先走 `session/cancel` RPC, 失败才 hard kill。后续 prompt 仍能用同 session 发。
+- **`btn-mode` 和 `btn-model`**: 之前 v0.5.by 注释说"等 mcode 0.1.5+ 加 set_config_option 后可恢复", 现在 mcode 0.2.4 真的支持了, 取消 hidden 并接通。
+- **server.js 启动时**加 mcode 版本检查, 旧 mcode 直接退出 + 双语错误信息。
+- **mcode-acp.js** 透传 4 个新事件 kind, 不再只走老 `goal_update` legacy shape。
+
 ## v1.0.1 (2026-08-25) — LAN access security controls
 
 > Scope: address PR #16 reviewer feedback that `SECURITY-NOTES.md §2`
