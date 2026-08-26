@@ -238,6 +238,34 @@
         </div>
       </div>
 
+      <!-- v1.0.2 Round 6: Goal budget bar (mcode 0.2.4 goal_update 推) -->
+      <div class="goal-bar" id="goal-bar" hidden>
+        <div class="goal-bar-header">
+          <span class="goal-bar-title" data-i18n="goal_title">目标</span>
+          <span class="goal-bar-status" id="goal-bar-status">active</span>
+          <button class="goal-bar-clear" id="goal-bar-clear" data-i18n-title="goal_clear_btn" title="清空目标">×</button>
+        </div>
+        <div class="goal-bar-progress">
+          <div class="goal-bar-fill" id="goal-bar-fill" style="width: 0%;"></div>
+        </div>
+        <div class="goal-bar-meta">
+          <span id="goal-bar-usage">0 / 0</span>
+        </div>
+      </div>
+
+      <!-- v1.0.2 Round 6: Delegation card (子任务快照) -->
+      <div class="delegation-card" id="delegation-card" hidden>
+        <div class="delegation-card-header" data-i18n="delegation_card_title">子任务</div>
+        <div class="delegation-card-items" id="delegation-card-items"></div>
+        <div class="delegation-card-empty" data-i18n="delegation_empty">当前无活跃子任务</div>
+      </div>
+
+      <!-- v1.0.2 Round 6: Ask 倒计时 (Ask modal 打开时显示) -->
+      <div class="ask-countdown" id="ask-countdown" hidden>
+        <span data-i18n="ask_countdown">自动续接倒计时</span>
+        <span id="ask-countdown-seconds">30</span><span data-i18n="ask_countdown_seconds">{n} 秒</span>
+      </div>
+
       <div class="input-area">
         <div class="input-inner">
           <div class="attachment-list" id="attachment-list"></div>
