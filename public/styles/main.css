@@ -3092,3 +3092,140 @@ body.is-remote .btn-lan-toggle { display: none; }
 /* chip-lan 展开态 — chevron 旋转提示 */
 .btn-lan-toggle[aria-expanded="true"] .btn-chevron { transform: rotate(90deg); }
 .btn-lan-toggle .btn-chevron { transition: transform 0.2s; }
+
+/* ============================================================ */
+/* v1.0.2: mcode 0.2.4 control surface 样式                    */
+/* ============================================================ */
+
+/* Queue badge (LLM 响应中显示, hover 展开队列列表) */
+.queue-badge-wrap {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+.queue-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--accent-soft, #e8f0fe);
+  color: var(--accent, #1a73e8);
+  border: 1px solid var(--accent, #1a73e8);
+  border-radius: 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.queue-badge:hover { background: var(--accent-hover, #d2e3fc); }
+.queue-badge-count {
+  background: var(--accent, #1a73e8);
+  color: white;
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 16px;
+  text-align: center;
+}
+.queue-list {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 6px;
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border-light, #dadce0);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  min-width: 280px;
+  max-width: 480px;
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 100;
+}
+.queue-list-header {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #5f6368);
+  border-bottom: 1px solid var(--border-light, #dadce0);
+}
+.queue-list-items { padding: 4px 0; }
+.queue-list-empty {
+  padding: 16px 12px;
+  font-size: 12px;
+  color: var(--text-tertiary, #80868b);
+  text-align: center;
+}
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-light, #f1f3f4);
+}
+.queue-item:last-child { border-bottom: none; }
+.queue-item-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.queue-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.queue-item-btn {
+  padding: 2px 6px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border-light, #dadce0);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.queue-item-btn:hover { background: var(--bg-hover, #f1f3f4); }
+.queue-item-btn.danger { color: var(--danger, #d93025); border-color: var(--danger, #d93025); }
+.queue-item-btn.danger:hover { background: #fce8e6; }
+
+/* btn-steer 顶栏 (跟 btn-send 平级, LLM 响应中显示) */
+.btn-steer {
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border-light, #dadce0);
+}
+.btn-steer:hover { background: var(--bg-hover, #f1f3f4); }
+.btn-steer .icon { width: 14px; height: 14px; }
+
+/* btn-mode / btn-model 恢复显示 (mcode 0.2.4 真支持 set_mode / set_config_option) */
+.btn-mode-static {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border-light, #dadce0);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+.btn-mode-static:hover { background: var(--bg-hover, #f1f3f4); }
+.btn-mode-static .icon { width: 14px; height: 14px; }
+
+#btn-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border-light, #dadce0);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+#btn-model:hover { background: var(--bg-hover, #f1f3f4); }

@@ -149,6 +149,50 @@ const ROUTES = [
     handler: chatRoute.handleCmd,
   },
 
+  // v1.0.2: mcode 0.2.4 control surface — chat endpoints
+  {
+    method: "POST",
+    match: (p) => p === "/api/chat/queue",
+    handler: chatRoute.handleQueue,
+  },
+  {
+    method: "POST",
+    match: (p) => p === "/api/chat/queue/update",
+    handler: chatRoute.handleQueueUpdate,
+  },
+  {
+    method: "POST",
+    match: (p) => p === "/api/chat/queue/delete",
+    handler: chatRoute.handleQueueDelete,
+  },
+  {
+    method: "POST",
+    match: (p) => p === "/api/chat/steer",
+    handler: chatRoute.handleSteer,
+  },
+  {
+    method: "POST",
+    match: (p) => p === "/api/chat/mode",
+    handler: chatRoute.handleSetMode,
+  },
+  {
+    method: "POST",
+    match: (p) => p === "/api/chat/config-option",
+    handler: chatRoute.handleSetConfigOption,
+  },
+
+  // v1.0.2: mcode 0.2.4 control surface — sessions endpoints
+  {
+    method: "POST",
+    match: (p) => p === "/api/sessions/fork",
+    handler: sessionsRoute.handleFork,
+  },
+  {
+    method: "POST",
+    match: (p) => p === "/api/sessions/resume",
+    handler: sessionsRoute.handleResume,
+  },
+
   // Usage
   {
     method: "POST",

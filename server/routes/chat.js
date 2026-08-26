@@ -149,8 +149,7 @@ export async function handleSend(req, res, ctx) {
 // POST /api/stop — 中断正在跑的 prompt
 // v0.5.by: 优先走 mcode acp session/cancel RPC (温和取消 — 让 mcode 走 finalize),
 //   走不通再 hard kill child process (兜底)
-// 注意: mcode 0.1.5 acp 不支持 session/cancel (probe 实测 "Method not found"),
-//   所以 cancelled 永远是 false, 直接走 hard kill
+// v1.0.2: mcode 0.2.4 acp 真正支持 session/cancel (cli.js grep 验证), 温和路径生效
 // 旧实现: 永远 child.kill() — 太粗暴,会让 mcode acp 进程直接 SIGKILL,
 //   同进程里的 background task 也会被 runtime-shutdown 杀 (子 agent 跑不完的根因之一)
 export async function handleStop(_req, res, ctx) {
@@ -223,4 +222,205 @@ export async function handleCmd(req, res, ctx) {
   res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify({ ok: true }));
   await handleCmdCommand(cmd, cs, cid);
+}
+
+// --- v1.0.2: mcode 0.2.4 control surface handlers ---
+
+// POST /api/chat/queue — 排队一条消息 (LLM 响应进行中)
+//   body: { text: string }
+//   调 mcode acp session/queue RPC
+export async function handleQueue(req, res, ctx) {
+  const cs = ctx.cs;
+  const payload = await readJson(req);
+  const text = (payload.text || "").trim();
+  if (!text) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "text required" }));
+  }
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(
+      JSON.stringify({ ok: false, error: "no active mcode session" }),
+    );
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    const r = await client.queue(cs.mcodeSessionId, text);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, item: r || null }));
+  } catch (e) {
+    console.warn(`[chat.queue] cid=${ctx.cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
+}
+
+// POST /api/chat/queue/update — 改写队列里某条
+//   body: { itemId, text }
+export async function handleQueueUpdate(req, res, ctx) {
+  const cs = ctx.cs;
+  const payload = await readJson(req);
+  const itemId = payload.itemId;
+  const text = (payload.text || "").trim();
+  if (!itemId || !text) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(
+      JSON.stringify({ ok: false, error: "itemId and text required" }),
+    );
+  }
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(
+      JSON.stringify({ ok: false, error: "no active mcode session" }),
+    );
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    const r = await client.queueUpdate(cs.mcodeSessionId, itemId, text);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, item: r || null }));
+  } catch (e) {
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
+}
+
+// POST /api/chat/queue/delete — 从队列删一条
+//   body: { itemId }
+export async function handleQueueDelete(req, res, ctx) {
+  const cs = ctx.cs;
+  const payload = await readJson(req);
+  const itemId = payload.itemId;
+  if (!itemId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "itemId required" }));
+  }
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(
+      JSON.stringify({ ok: false, error: "no active mcode session" }),
+    );
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    await client.queueDelete(cs.mcodeSessionId, itemId);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true }));
+  } catch (e) {
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
+}
+
+// POST /api/chat/steer — 引导当前 turn (不打断)
+//   body: { text }
+export async function handleSteer(req, res, ctx) {
+  const cs = ctx.cs;
+  const payload = await readJson(req);
+  const text = (payload.text || "").trim();
+  if (!text) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "text required" }));
+  }
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(
+      JSON.stringify({ ok: false, error: "no active mcode session" }),
+    );
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    await client.steer(cs.mcodeSessionId, text);
+    // 记录 steer 事件到 cs (环形 buffer 20 条)
+    const { broadcastSteered } = await import("../lib/state-bus.js");
+    broadcastSteered(ctx.cid, {
+      itemId: `steer-${Date.now()}`,
+      originalText: "(current turn)",
+      steeredText: text,
+      at: Date.now(),
+    });
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true }));
+  } catch (e) {
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
+}
+
+// POST /api/chat/mode — 切 session 模式 (plan / default / acceptEdits / bypassPermissions)
+export async function handleSetMode(req, res, ctx) {
+  const cs = ctx.cs;
+  const payload = await readJson(req);
+  const mode = (payload.mode || "").trim();
+  if (!mode) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "mode required" }));
+  }
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(
+      JSON.stringify({ ok: false, error: "no active mcode session" }),
+    );
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    await client.setMode(cs.mcodeSessionId, mode);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, mode }));
+  } catch (e) {
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
+}
+
+// POST /api/chat/config-option — 改 session config (e.g. model)
+//   body: { key, value }
+export async function handleSetConfigOption(req, res, ctx) {
+  const cs = ctx.cs;
+  const payload = await readJson(req);
+  const key = (payload.key || "").trim();
+  const value = payload.value;
+  if (!key) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "key required" }));
+  }
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(
+      JSON.stringify({ ok: false, error: "no active mcode session" }),
+    );
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    await client.setConfigOption(cs.mcodeSessionId, key, value);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, key, value }));
+  } catch (e) {
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
 }
