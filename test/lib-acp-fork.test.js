@@ -65,7 +65,7 @@ describe("v1.0.2: McodeAcpClient 新增 RPC 包装 (mock JSON-RPC)", () => {
     await c.queueUpdate("mvs-1", "q-1", "text B");
     await c.queueDelete("mvs-1", "q-1");
     await c.queueSteer("mvs-1", "q-1");
-    assert.equal(calls[0].method, "session/queue");
+    assert.equal(calls[0].method, "session/queue/enqueue");
     assert.equal(calls[0].params.text, "text A");
     assert.equal(calls[1].method, "session/queue/update");
     assert.equal(calls[1].params.itemId, "q-1");
