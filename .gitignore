@@ -5,6 +5,11 @@
 .DS_Store
 .server.log
 .server.err
+# v1.0.2 Round 6: 临时启动 server 时的 log (从 Start-Process 跑预览)
+server-test.out
+server-test.err
+# v1.0.2 Round 6: 之前误放的 mirror 文件 (test/ 子目录才是正确位置)
+plugins/Wzdhehe/mcode-webui/lib-*.test.js
 
 # local probe artifacts (kept out of repo — they belong in /acp-probe/ or ad-hoc)
 probes/.cache/
