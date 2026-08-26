@@ -4,7 +4,7 @@
 > 上游 mcode TUI: https://github.com/MiniMax-AI/MiniMax-Code (CHANGELOG.md)
 > 下游 webui: 本仓库
 
-**最后更新**: 2026-08-26 (Round 5 完成)
+**最后更新**: 2026-08-26 (Round 5 完成, 3 commit 落地待 push)
 
 ---
 
@@ -37,7 +37,8 @@
 - ✅ Lint 0 warning
 - ✅ 测试 410 pass / 0 fail / 1 skipped
 - ✅ 文档: CHANGELOG v1.0.2 + CAPABILITIES §14 + PROGRESS.md (本文件)
-- ⏳ **不 push** (等用户说"推")
+- ✅ 3 commit (3f124e7 feat / e0744df docs / c973f5e mirror) 落地
+- ⏳ **不 push** (等用户说"推", 推后会触发 PR #16 自动更新)
 
 ---
 
