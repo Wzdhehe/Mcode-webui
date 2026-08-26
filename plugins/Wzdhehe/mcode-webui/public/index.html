@@ -224,6 +224,20 @@
         </div>
       </div>
 
+      <!-- v1.0.2: mcode 0.2.4 control surface — queue badge (LLM 响应中显示) -->
+      <div class="queue-badge-wrap" id="queue-badge-wrap" hidden>
+        <button class="queue-badge" id="queue-badge" type="button">
+          <span class="queue-badge-count" id="queue-badge-count">0</span>
+          <span data-i18n="queue_badge">排队中</span>
+          <svg class="icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="queue-list" id="queue-list" hidden>
+          <div class="queue-list-header" data-i18n="queue_badge">排队中</div>
+          <div class="queue-list-items" id="queue-list-items"></div>
+          <div class="queue-list-empty" id="queue-list-empty" data-i18n="queue_empty">队列为空</div>
+        </div>
+      </div>
+
       <div class="input-area">
         <div class="input-inner">
           <div class="attachment-list" id="attachment-list"></div>
@@ -240,28 +254,25 @@
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
               </button>
               <input type="file" id="file-input" multiple hidden>
-              <!-- v0.5.by: btn-mode 隐藏 (mcode 0.1.5 acp 不支持 session/set_config_option, 切 mode 等于没切)
-                   仍保留 mode-label 节点让 state push 不报错, 但整按钮 hidden — Wzdhehe 反馈 -->
-              <span class="btn-mode-static" id="btn-mode" title="mcode 0.1.5 不支持 mid-session 改 permission mode (实测 probe)" hidden>
+              <!-- v1.0.2: btn-mode 恢复 (mcode 0.2.4 acp 终于支持 session/set_mode RPC)
+                   之前 v0.5.by 注释了 "等 mcode 0.1.5+ 加 set_config_option 后可恢复", 0.2.4 就是了 -->
+              <span class="btn-mode-static" id="btn-mode" title="切换 session 模式 (mcode 0.2.4+)" data-i18n-title="mode_label">
                 <svg class="icon mode-icon" id="mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                 <span id="mode-label">Default</span>
               </span>
               <div class="input-spacer"></div>
-              <!-- v0.5.bz: 暂时隐藏模型切换按钮 (隐藏不删除, 等 mcode 0.1.5+ 加 set_config_option 后可恢复)
-                   原因: mcode 0.1.5 acp 协议不支持 session/set_config_option (实测 "Method not found",
-                   已在 server/lib/mcode-rpc.js:32-40 的 UNSUPPORTED set 显式列出)
-                   后果: webui 端 cs.model.name 改了 UI 也变, 但 runMcodeAcp 默认路径不读 opts.model,
-                   调 client.newSession(workspace) / client.loadSession(sid, workspace) 都不带 model 参数
-                   (acp.mjs:155-160), mcode 实际仍用旧 model 跑
-                   唯一能真切的路径: mcode exec (MCODE_USE_ACP=0) — runMcodeExec 真把 --model 透传给子进程
-                   想临时恢复: 把下面 btn-model 标签的 hidden 去掉即可, server /api/set-model 端点没动 -->
-              <button class="btn-tool" id="btn-model" title="mcode 0.1.5 acp 不支持 mid-session 改 model (实测 probe); 按钮已隐藏" hidden>
+              <!-- v1.0.2: btn-model 恢复 (mcode 0.2.4 acp 终于支持 session/set_config_option) -->
+              <button class="btn-tool" id="btn-model" title="切换模型 (mcode 0.2.4+)" data-i18n-title="btn_plus_model">
                 <span id="model-label">—</span>
                 <svg class="icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
               </button>
               <button class="btn-send" id="btn-send" title="发送 (Enter)">
                 <svg class="icon icon-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
                 <svg class="icon icon-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+              </button>
+              <!-- v1.0.2: btn-steer 顶栏 (LLM 响应中可见, 弹 quick input 调 session/steer RPC) -->
+              <button class="btn-tool btn-steer" id="btn-steer" title="引导当前响应" data-i18n-title="steer_button" hidden>
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h12"/></svg>
               </button>
             </div>
             <!-- v0.5.bf: mode popover 移到 input-box 内部，跟着输入框走（之前在 body 底部，welcome 时定位错位） -->

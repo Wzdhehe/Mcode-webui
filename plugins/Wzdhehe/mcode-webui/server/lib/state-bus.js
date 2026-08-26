@@ -84,6 +84,14 @@ export function makeClientState() {
       lastDeltaAt: null,
       tps: 0,
     },
+    // v1.0.2: mcode 0.2.4 control surface 字段 (per-cid 镜像, 不持久化)
+    mcodeQueue: [],          // [{ itemId, text, createdAt }] — LLM 响应中排队的消息
+    mcodeForks: [],          // [{ forkId, atMessageId, createdAt, title }] — 最近 5 条 fork
+    mcodeSteers: [],         // [{ itemId, originalText, steeredText, at }] — 最近 20 条 steer
+    goalBudget: null,        // { used, total, status: 'active'|'paused'|'blocked'|'complete'|'budget_limited' }
+    activeDelegations: [],   // [{ delegationId, agent, status, ... }] — 子任务快照
+    skills: [],              // [{ name, description, source }] — Round 7 用, 先占位
+    runtimeReady: false,     // v1.0.2: mcode acp initialize 完成前 false, 客户端据此禁用 send
   };
 }
 
@@ -335,5 +343,102 @@ export function broadcastTokenRotated(token) {
     try {
       res.write(frame);
     } catch {}
+  }
+}
+
+// --- v1.0.2: mcode 0.2.4 control surface broadcasts ---
+// 状态归属 (per plan.md "状态归属" 节): mcode session 级别事件通过 mcodeSessionId 维度
+// 广播给所有同 session 的 cid; UI 偏好事件只推当前 cid。
+
+// 推 mcodeQueue 更新 (mcode 队列变化时调)
+// 更新指定 cid 的 cs.mcodeQueue, 同时通知所有共享同一 mcodeSessionId 的 cid
+export function broadcastQueueUpdate(cid, items) {
+  const cs = getClient(cid);
+  cs.mcodeQueue = Array.isArray(items) ? items : [];
+  const mvsId = cs.mcodeSessionId;
+  if (mvsId) {
+    // 通知所有共享 mvsId 的 cid
+    const peers = getCidsByMcodeSession(mvsId);
+    for (const { cid: peerCid } of peers) {
+      pushStateFor(peerCid);
+    }
+  } else {
+    pushStateFor(cid);
+  }
+}
+
+// 推 mcodeForks 更新 (fork 完成后调, 保留最近 5 条)
+export function broadcastForked(cid, fork) {
+  const cs = getClient(cid);
+  const forks = Array.isArray(cs.mcodeForks) ? cs.mcodeForks.slice() : [];
+  forks.unshift(fork);
+  cs.mcodeForks = forks.slice(0, 5); // 环形 buffer: 保留最近 5
+  pushStateFor(cid);
+}
+
+// 推 mcodeSteers 更新 (steer 触发后调, 保留最近 20 条)
+export function broadcastSteered(cid, item) {
+  const cs = getClient(cid);
+  const steers = Array.isArray(cs.mcodeSteers) ? cs.mcodeSteers.slice() : [];
+  steers.unshift(item);
+  cs.mcodeSteers = steers.slice(0, 20); // 环形 buffer: 保留最近 20
+  const mvsId = cs.mcodeSessionId;
+  if (mvsId) {
+    const peers = getCidsByMcodeSession(mvsId);
+    for (const { cid: peerCid } of peers) {
+      pushStateFor(peerCid);
+    }
+  } else {
+    pushStateFor(cid);
+  }
+}
+
+// 推 goalBudget 更新 (mcode goal_update 通知时调)
+export function broadcastGoalUpdate(cid, goal) {
+  const cs = getClient(cid);
+  cs.goalBudget = goal || null;
+  const mvsId = cs.mcodeSessionId;
+  if (mvsId) {
+    const peers = getCidsByMcodeSession(mvsId);
+    for (const { cid: peerCid } of peers) {
+      pushStateFor(peerCid);
+    }
+  } else {
+    pushStateFor(cid);
+  }
+}
+
+// 推 activeDelegations 更新 (mcode delegation_update 通知时调)
+export function broadcastDelegationUpdate(cid, delegations) {
+  const cs = getClient(cid);
+  cs.activeDelegations = Array.isArray(delegations) ? delegations : [];
+  const mvsId = cs.mcodeSessionId;
+  if (mvsId) {
+    const peers = getCidsByMcodeSession(mvsId);
+    for (const { cid: peerCid } of peers) {
+      pushStateFor(peerCid);
+    }
+  } else {
+    pushStateFor(cid);
+  }
+}
+
+// 推 currentSessionUpdate (mcode session 切换通知)
+export function broadcastCurrentSessionUpdate(cid, info) {
+  const cs = getClient(cid);
+  if (info && info.mcodeSessionId) {
+    cs.mcodeSessionId = info.mcodeSessionId;
+  }
+  if (info && info.title) {
+    cs.sessionTitle = info.title;
+  }
+  const mvsId = cs.mcodeSessionId;
+  if (mvsId) {
+    const peers = getCidsByMcodeSession(mvsId);
+    for (const { cid: peerCid } of peers) {
+      pushStateFor(peerCid);
+    }
+  } else {
+    pushStateFor(cid);
   }
 }

@@ -176,6 +176,60 @@ export class McodeAcpClient extends EventEmitter {
     return await this.request('session/list', cursor ? { cursor } : {})
   }
 
+  // --- v1.0.2: mcode 0.2.4 新增控制面 RPC 包装 ---
+  // 真实方法名从 cli.js bundle grep 验证 (参见 plan.md Summary 节)
+  // 所有方法都返回 Promise, 失败 reject (error.message 含 "Method not found" 时上层走 graceful path)
+
+  // 取消当前运行中的 turn — 温和取消, mcode 自己 finalize, 进程保留
+  async cancel(sessionId) {
+    return await this.request('session/cancel', { sessionId })
+  }
+
+  // 从指定消息分叉新会话 — 返回新 sessionId
+  async fork(sessionId, atMessageId) {
+    return await this.request('session/fork', { sessionId, atMessageId })
+  }
+
+  // 接续已存在的 mcode session — 重载 transcript, 不重启 client
+  async resume(sessionId) {
+    return await this.request('session/resume', { sessionId })
+  }
+
+  // 队列一条消息 (LLM 响应进行中)
+  async queue(sessionId, text) {
+    return await this.request('session/queue', { sessionId, text })
+  }
+
+  // 改写队列里某条消息
+  async queueUpdate(sessionId, itemId, text) {
+    return await this.request('session/queue/update', { sessionId, itemId, text })
+  }
+
+  // 从队列删一条
+  async queueDelete(sessionId, itemId) {
+    return await this.request('session/queue/delete', { sessionId, itemId })
+  }
+
+  // 队列项触发 steer (改当前 turn 方向)
+  async queueSteer(sessionId, itemId) {
+    return await this.request('session/queue/steer', { sessionId, itemId })
+  }
+
+  // 引导当前 turn (不等 turn 结束直接插入 steering 文本)
+  async steer(sessionId, text) {
+    return await this.request('session/steer', { sessionId, text })
+  }
+
+  // 切换 session 模式 (plan / default / acceptEdits / bypassPermissions)
+  async setMode(sessionId, mode) {
+    return await this.request('session/set_mode', { sessionId, mode })
+  }
+
+  // 改 session 维度的 config (e.g. model 切换)
+  async setConfigOption(sessionId, key, value) {
+    return await this.request('session/set_config_option', { sessionId, key, value })
+  }
+
   // 发 prompt + 等 stopReason + 收集 thinking/answer
   // onChunk({kind: 'thought'|'message'|'other'|'done', text?, update?, stopReason?})
   async prompt(sessionId, text, onChunk) {
@@ -223,6 +277,18 @@ export class McodeAcpClient extends EventEmitter {
         } else if (u.sessionUpdate === 'session_info_update') {
           // v0.5.by: mcode acp 0.1.5 推的 session info 变化 (mcode docs 没列具体字段, 透传)
           try { onChunk?.({ kind: 'session_info_update', update: u }) } catch {}
+        } else if (u.sessionUpdate === 'queue_update') {
+          // v1.0.2: mcode 0.2.4 acp 队列状态变化通知 (mcode 在消息加入/改写/删除队列时推)
+          try { onChunk?.({ kind: 'queue_update', update: u }) } catch {}
+        } else if (u.sessionUpdate === 'goal_update') {
+          // v1.0.2: mcode 0.2.4 acp 目标状态变化通知 (active/paused/blocked/complete/budget_limited)
+          try { onChunk?.({ kind: 'goal_update', update: u }) } catch {}
+        } else if (u.sessionUpdate === 'delegation_update') {
+          // v1.0.2: mcode 0.2.4 acp delegation 状态变化通知 (子任务开始/完成/abort)
+          try { onChunk?.({ kind: 'delegation_update', update: u }) } catch {}
+        } else if (u.sessionUpdate === 'current_session_update') {
+          // v1.0.2: mcode 0.2.4 acp 当前 session 切换通知 (resume / switch 触发)
+          try { onChunk?.({ kind: 'current_session_update', update: u }) } catch {}
         } else {
           try { onChunk?.({ kind: 'other', update: u }) } catch {}
         }

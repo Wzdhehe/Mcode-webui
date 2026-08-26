@@ -11,6 +11,7 @@ import {
   getMcodeSessionsForWorkspace,
   shutdownMcodeAcpSingleton,
   dropMcodeSessionFromCache,
+  invalidateMcodeSessionsCache,
 } from "../lib/acp-client.js";
 import { applyMavisUsageToCs } from "../lib/mavis-usage.js";
 import { getMcodeModelLimit } from "../lib/models.js";
@@ -374,4 +375,103 @@ export async function handleAcpSessionTitle(req, res, _ctx) {
   return res.end(
     JSON.stringify({ ok: true, sessionId: sid, title: title || null }),
   );
+}
+
+// --- v1.0.2: mcode 0.2.4 control surface handlers ---
+
+// POST /api/sessions/fork — 从 mcode session 的某条消息分叉
+//   body: { atMessageId, workspace? }
+//   调 mcode acp session/fork RPC
+//   注意: fork 是 mcode 自己的事 — 返回新 sessionId 后我们 invalidate cache,
+//   侧栏 mcodeSessions 自动包含新 fork (跟普通 session 一样)
+export async function handleFork(req, res, ctx) {
+  const cs = ctx.cs;
+  const cid = ctx.cid;
+  const payload = await readJson(req);
+  const atMessageId = payload.atMessageId;
+  const workspace = payload.workspace || (cs.workspace && cs.workspace.dir) || "";
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(
+      JSON.stringify({ ok: false, error: "no active mcode session" }),
+    );
+  }
+  if (!atMessageId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(
+      JSON.stringify({ ok: false, error: "atMessageId required" }),
+    );
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    const r = await client.fork(cs.mcodeSessionId, atMessageId);
+    // 失效 mcode sessions cache, 侧栏会自动显示新 fork
+    invalidateMcodeSessionsCache(workspace);
+    // 记录到 cs.mcodeForks (环形 buffer 5 条)
+    const { broadcastForked } = await import("../lib/state-bus.js");
+    broadcastForked(cid, {
+      forkId: (r && (r.sessionId || r.forkId)) || `fork-${Date.now()}`,
+      atMessageId,
+      createdAt: Date.now(),
+      title: r && r.title ? r.title : `${cs.sessionTitle || "Session"} (fork)`,
+    });
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, fork: r || null }));
+  } catch (e) {
+    console.warn(`[sessions.fork] cid=${cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
+}
+
+// POST /api/sessions/resume — 接续 mcode session
+//   body: { sessionId?, strategy? }  strategy: 'specified' (default) | 'most-recent'
+//   调 mcode acp session/resume RPC
+export async function handleResume(req, res, ctx) {
+  const cs = ctx.cs;
+  const cid = ctx.cid;
+  const payload = await readJson(req);
+  const strategy = payload.strategy || "specified";
+  let targetSid = payload.sessionId || null;
+  // most-recent: 列 mcode sessions, 过滤 cwd 跟当前 workspace 一致, 选最近一个
+  if (strategy === "most-recent") {
+    const workspace = (cs.workspace && cs.workspace.dir) || "";
+    try {
+      const all = await getMcodeSessionsForWorkspace(workspace);
+      if (Array.isArray(all) && all.length > 0) {
+        targetSid = all[0].sessionId || all[0].id || null;
+      }
+    } catch (e) {
+      console.warn(`[sessions.resume] list failed cid=${cid}: ${e.message}`);
+    }
+  }
+  if (!targetSid) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(
+      JSON.stringify({
+        ok: false,
+        error: "sessionId required (or strategy=most-recent with existing sessions)",
+      }),
+    );
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    await client.resume(targetSid);
+    // 更新 cs (本地视图切到该 session)
+    cs.mcodeSessionId = targetSid;
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, sessionId: targetSid }));
+  } catch (e) {
+    console.warn(`[sessions.resume] cid=${cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
 }

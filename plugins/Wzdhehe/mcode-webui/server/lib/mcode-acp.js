@@ -423,18 +423,31 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
           }
           console.log(`[mode.update] cid=${cid} mode=${mode}`);
         } else if (c.kind === "goal_update" && c.update) {
-          // mcode 0.1.5 acp 协议里 goal_update 实际上不一定发 (cli.js 搜不到此事件 type 字面量)
-          // 但保留 handler — 如果未来 mcode 0.1.6+ 加了, 直接用
+          // v1.0.2: mcode 0.2.4 发 goal_update, 新 shape 是 { used, total, status } (5 状态)
+          // 旧 mcode 0.1.5 可能发 { active, text, duration } shape — 两套都支持
           const u = c.update;
-          cs.goal = {
-            active: !!u.active,
-            text: u.text || u.description || null,
-            status: u.status || null,
-            duration: u.duration || null,
-          };
-          console.log(
-            `[goal.update] cid=${cid} active=${cs.goal.active} status=${cs.goal.status}`,
-          );
+          // 新 shape: 设置 cs.goalBudget
+          if (typeof u.used === "number" || typeof u.total === "number" || u.status) {
+            cs.goalBudget = {
+              used: typeof u.used === "number" ? u.used : 0,
+              total: typeof u.total === "number" ? u.total : 0,
+              status: u.status || "active",
+            };
+            console.log(
+              `[goal.update] cid=${cid} status=${cs.goalBudget.status} used=${cs.goalBudget.used}/${cs.goalBudget.total}`,
+            );
+          } else {
+            // 旧 shape: 设置 cs.goal (active/text/duration)
+            cs.goal = {
+              active: !!u.active,
+              text: u.text || u.description || null,
+              status: u.status || null,
+              duration: u.duration || null,
+            };
+            console.log(
+              `[goal.update.legacy] cid=${cid} active=${cs.goal.active} status=${cs.goal.status}`,
+            );
+          }
         } else if (c.kind === "config_option_update" && c.update) {
           // v0.5.by: mcode acp 0.1.5 推的 config 变化事件
           // 典型场景: 别的客户端改了 permissionMode / model, webui 同步本地 cs
@@ -467,6 +480,37 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
           console.log(
             `[session.info] cid=${cid} keys=${JSON.stringify(Object.keys(u || {})).slice(0, 200)}`,
           );
+        } else if (c.kind === "queue_update" && c.update) {
+          // v1.0.2: mcode 0.2.4 队列状态变化
+          // 典型 payload: { sessionId, items: [{ itemId, text, createdAt }] }
+          const u = c.update;
+          const items = Array.isArray(u.items) ? u.items : [];
+          cs.mcodeQueue = items;
+          console.log(
+            `[queue.update] cid=${cid} items=${items.length} mvsId=${cs.mcodeSessionId}`,
+          );
+        } else if (c.kind === "delegation_update" && c.update) {
+          // v1.0.2: mcode 0.2.4 delegation 状态变化
+          // 典型 payload: { sessionId, delegations: [{ delegationId, agent, status, ... }] }
+          const u = c.update;
+          const dels = Array.isArray(u.delegations) ? u.delegations : [];
+          cs.activeDelegations = dels;
+          console.log(
+            `[delegation.update] cid=${cid} delegations=${dels.length}`,
+          );
+        } else if (c.kind === "current_session_update" && c.update) {
+          // v1.0.2: mcode 0.2.4 当前 session 切换 (resume / switch 触发)
+          // 典型 payload: { sessionId, title }
+          const u = c.update;
+          if (u && u.sessionId) {
+            cs.mcodeSessionId = u.sessionId;
+            console.log(
+              `[current.session.update] cid=${cid} → mvsId=${u.sessionId}`,
+            );
+          }
+          if (u && u.title) {
+            cs.sessionTitle = u.title;
+          }
         } else if (c.kind === "other" && c.update) {
           const u = c.update;
           if (u && u.sessionUpdate) {

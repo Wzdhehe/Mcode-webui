@@ -1,4 +1,4 @@
-# mcode Web UI
+# Mcode Web UI
 
 **[English](README.md) | [简体中文](README.zh-CN.md)**
 
@@ -11,7 +11,7 @@
 > 套餐用量右向展开，token 鉴权局域网，移动端响应。
 
 ```
-[浏览器 :8080] ←─ SSE /api/events ─ [Node server.js] ─ mcode acp / exec ─ [mcode CLI]
+[浏览器 :8080] ←─ SSE /api/events ─ [Node server.js] ─ mcode acp / exec ─ [Mcode CLI]
       │                                     │
       └──── REST /api/* ────────────────────┴── ~/.minimax/v2 sqlite（读 + 删会话）
 ```
@@ -49,13 +49,17 @@
 - **单色主题** —— "Ink & Paper" 暗 / 亮双主题，跟随系统
 - **两种传输** —— `mcode acp`（默认，多轮）+ `mcode exec`
   兜底（用于老版本客户端 / 降级模式）
+- **会话控制 (v1.0.2, mcode 0.2.4+)** —— fork (从指定消息分叉新会话)、
+  queue (LLM 响应中排队新消息)、steer (引导当前 turn 不打断)、
+  resume (接续最近 mcode session)、mode switch (切 plan / permission / model) —
+  10 个新 acp RPC + 4 个新 sessionUpdate 通知 + 8 条新 webui 路由 + 完整 UI
 
 ## 快速开始
 
 ```bash
-git clone https://github.com/Wzdhehe/mcode-webui.git
-cd mcode-webui
-node server.js                 # mcode CLI 自动探测
+git clone https://github.com/Wzdhehe/Mcode-webui.git
+cd Mcode-webui
+node server.js                 # Mcode CLI 自动探测
 # → http://127.0.0.1:8080/     (局域网：http://<局域网IP>:8080/)
 
 # 在共享网络上推荐加 token：
@@ -71,8 +75,7 @@ TOKEN=$(openssl rand -hex 16) node server.js
 |------|------|------|
 | `PORT` | `8080` | HTTP 端口（v1.0 之前是 `7890`） |
 | `HOST` | `0.0.0.0` | 绑定地址（`127.0.0.1` = 仅本机） |
-| `TOKEN` | （空） | 非本机请求必带的 token。**v1.0.1**：不设的话，server 首次启动会自动生成 32 hex token（见下面的"Token 鉴权"段） |
-| `MCODE_WEBUI_SETTINGS_PATH` | `~/.mcode-webui/settings.json` | **v1.0.1**：覆盖 settings 文件位置（测试、非默认安装） |
+| `TOKEN` | （空） | 非本机请求必带的 token |
 | `MCODE_MODEL` | `minimax_api/MiniMax-M3` | 默认模型 |
 | `MCODE_CMD` | 自动探测 | `mcode` / `mcode.cmd` 路径 |
 | `MCODE_WEBUI_UPLOAD_DIR` | 自动 | 附件目录 |
@@ -111,7 +114,7 @@ npm run package:plugin    # dist/Wzdhehe/mcode-webui/ + .zip
 ## 贡献
 
 见 [CONTRIBUTING.md](CONTRIBUTING.md)。`npm test`（382 通过 + 1 跳过）
-和 `npm run lint` 必须保持全绿；插件树（`plugins/.../mcode-webui/`）
+和 `npm run lint` 必须保持全绿；插件树（`plugins/.../Mcode-webui/`）
 的副本与仓库根保持同步。
 
 ## 开源协议
@@ -120,7 +123,7 @@ MIT —— 见 [LICENSE](plugins/Wzdhehe/mcode-webui/LICENSE)。
 
 ## 命名说明
 
-"mcode-webui" 这个名字里 "mcode" 是上游 CLI 工具名，"webui" 是
-它的 Web 界面后缀。所以 "mcode CLI 的 webui" = "mcode 这个命令行
+"Mcode-webui" 这个名字里 "mcode" 是上游 CLI 工具名，"webui" 是
+它的 Web 界面后缀。所以 "Mcode CLI 的 webui" = "mcode 这个命令行
 工具的 Web 界面"，不是 "mcode 命令行版的 Web 工具"。两者方向
 相反。

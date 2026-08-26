@@ -1690,3 +1690,204 @@ export function attachModalEvents() {
   }
 }
 
+// ============================================================
+// v1.0.2: mcode 0.2.4 control surface — buttons + handlers
+// ============================================================
+
+// 排队当前 textarea 内容 (LLM 响应进行中)
+export async function queueCurrentMessage() {
+  const textarea = document.getElementById('input-textarea')
+  const text = (textarea.value || '').trim()
+  if (!text) return
+  try {
+    const r = await fetch('/api/chat/queue' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ text }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (j.ok) {
+      textarea.value = ''
+      autoResize()
+      if (typeof showToast === 'function') showToast(t('queue_button'))
+    } else {
+      if (typeof showToast === 'function') showToast(j.error || 'queue failed')
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('queue error: ' + e.message)
+  }
+}
+
+// 改写队列里某条
+export async function queueUpdateItem(itemId, newText) {
+  if (!itemId || !newText) return
+  try {
+    const r = await fetch('/api/chat/queue/update' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ itemId, text: newText }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!j.ok && typeof showToast === 'function') {
+      showToast(j.error || 'queue update failed')
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('queue update error: ' + e.message)
+  }
+}
+
+// 从队列删一条
+export async function queueDeleteItem(itemId) {
+  if (!itemId) return
+  try {
+    const r = await fetch('/api/chat/queue/delete' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ itemId }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!j.ok && typeof showToast === 'function') {
+      showToast(j.error || 'queue delete failed')
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('queue delete error: ' + e.message)
+  }
+}
+
+// 引导当前 turn
+export async function steerCurrentResponse(text) {
+  const s = (text || '').trim()
+  if (!s) return
+  try {
+    const r = await fetch('/api/chat/steer' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ text: s }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (j.ok) {
+      if (typeof showToast === 'function') showToast(t('steer_notice'))
+    } else {
+      if (typeof showToast === 'function') showToast(j.error || 'steer failed')
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('steer error: ' + e.message)
+  }
+}
+
+// 切 session 模式 (plan / default / acceptEdits / bypassPermissions)
+export async function setSessionMode(mode) {
+  if (!mode) return
+  try {
+    const r = await fetch('/api/chat/mode' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ mode }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!j.ok && typeof showToast === 'function') {
+      showToast(j.error || 'mode change failed')
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('mode error: ' + e.message)
+  }
+}
+
+// 改 session config (e.g. model 切换)
+export async function setSessionConfig(key, value) {
+  if (!key) return
+  try {
+    const r = await fetch('/api/chat/config-option' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ key, value }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!j.ok && typeof showToast === 'function') {
+      showToast(j.error || 'config change failed')
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('config error: ' + e.message)
+  }
+}
+
+// 从 mcode session 某条消息分叉
+export async function forkFromMessage(atMessageId) {
+  if (!atMessageId) return
+  if (!confirm(t('fork_confirm'))) return
+  try {
+    const r = await fetch('/api/sessions/fork' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ atMessageId }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (j.ok) {
+      if (typeof showToast === 'function') showToast(t('fork_success'))
+    } else {
+      if (typeof showToast === 'function') showToast(j.error || t('fork_failed'))
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('fork error: ' + e.message)
+  }
+}
+
+// 接续 mcode session (Ctrl+U 走这里)
+export async function resumeMostRecent() {
+  try {
+    const r = await fetch('/api/sessions/resume' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ strategy: 'most-recent' }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (j.ok) {
+      if (typeof showToast === 'function') showToast(t('resume_strategy_most_recent'))
+    } else {
+      if (typeof showToast === 'function') showToast(j.error || 'resume failed')
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('resume error: ' + e.message)
+  }
+}
+
+// 绑定 v1.0.2 control surface 按钮 (在 attachEvents() 里调)
+export function attachControlSurface() {
+  // Send 按钮: 响应中变成 "Queue" 模式
+  const btnSend = document.getElementById('btn-send')
+  if (btnSend) {
+    btnSend.addEventListener('click', (e) => {
+      // 响应进行中: 走 queue 路径 (state.running.active 决定)
+      try {
+        const s = window.__webui_state || null
+        if (s && s.running && s.running.active) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          queueCurrentMessage()
+        }
+      } catch {}
+    }, true) // capture 阶段, 在 events.js 的 send() 之前拦截
+  }
+  // 顶栏 Steer 按钮 (LLM 响应中可见)
+  const btnSteer = document.getElementById('btn-steer')
+  if (btnSteer) {
+    btnSteer.addEventListener('click', () => {
+      const text = prompt(t('steer_input_placeholder'))
+      if (text) steerCurrentResponse(text)
+    })
+  }
+  // 暴露到 window 方便其他模块调
+  try {
+    window.__webui_v102 = {
+      forkFromMessage,
+      resumeMostRecent,
+      setSessionMode,
+      setSessionConfig,
+      queueCurrentMessage,
+      queueUpdateItem,
+      queueDeleteItem,
+      steerCurrentResponse,
+    }
+  } catch {}
+}
+
