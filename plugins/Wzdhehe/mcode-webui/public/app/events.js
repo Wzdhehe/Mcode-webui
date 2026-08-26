@@ -131,31 +131,39 @@ export function toggleMode() {
   modePopover.hidden = !modeOpen
 }
 export function hideMode() { modeOpen = false; modePopover.hidden = true }
+// webui 内部 mode label → mcode acp mode 值 (从 server/routes/model.js handleListPermissionModes 同步)
+//   跟 server/lib/mcode-rpc.js 的 mcodePermissionToWebui 互为反向
+const WEBUI_TO_MCODE_MODE = {
+  ask: 'default',           // 每次敏感操作都问
+  auto: 'auto',             // 仅高风险询问
+  full: 'bypassPermissions', // 不询问 (旧 label 叫 full / "Full access")
+  read: 'read',             // 只读
+  off: 'off',               // 关
+  plan: 'plan',             // Plan 模式 (mcode 0.2.4 支持)
+}
+
 export async function setMode(mode) {
-  // v0.5.by: plan 模式本地 toggle — mcode 0.1.5 acp 不支持 session/set_mode (probe 验证 Method not found)
-  //   fallback: send() 时给 prompt 加 plan 模板前缀, 强制 mcode 按 Plan: 格式输出
-  //   这是 mcode 0.1.5 唯一可行的进 plan mode 路径
-  //   (goal 模式: 之前是按钮, mcode 0.1.5 不支持, 删了按钮. 用 /goal slash command 代替)
+  // v1.0.2: mcode 0.2.4 acp 真支持 session/set_mode, 改走新 RPC
+  //   之前 v0.5.by 只更新 webui UI label, mcode 实际不变 — 那个 v0.1.5 acp 妥协
+  //   现在 webui mode label → mcode mode (通过 WEBUI_TO_MCODE_MODE 翻译)
   hideMode()
   if (mode === 'plan') {
+    // plan mode: webui 端本地 toggle (state.planMode) — 不通过 mcode acp
+    //   plan mode 是 webui 内部"加 plan 模板前缀"的开关, 不是 mcode acp 模式
     state.planMode = !state.planMode
     showToast(state.planMode ? t('plan_mode_on') : t('plan_mode_off'), 2500)
     return
   }
-  // 权限 mode (ask/auto/full/read) — mcode 0.1.5 acp 不支持 mid-session 改 permissionMode
-  //   server 仅更新 webui UI, mcode 实际 mode 不变 (启动时已固定)
+  // 权限 mode (ask/auto/full/read/off) — 翻译成 mcode acp 值, 调 setSessionMode (新 RPC)
+  const mcodeMode = WEBUI_TO_MCODE_MODE[mode] || 'bypassPermissions'
+  if (state.planMode) state.planMode = false
   try {
-    const r = await fetch('/api/permissions' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ mode })
-    })
-    const j = await r.json().catch(() => ({}))
-    if (state.planMode) state.planMode = false
-    if (j && j.ok === true) {
-        showToast(t('perm_mode_note'), 4500)
-    }
-  } catch (e) { console.error(e) }
+    await setSessionMode(mcodeMode)  // 调 /api/chat/mode, 调 McodeAcpClient.setMode
+    showToast('已切到 ' + mode, 1500)  // 简易反馈 (todo: 改成 i18n key)
+  } catch (e) {
+    console.error('[setMode]', e)
+    showToast('Mode change failed: ' + e.message, 3000)
+  }
 }
 
 // ============================================================
@@ -1854,6 +1862,9 @@ export async function resumeMostRecent() {
 // 绑定 v1.0.2 control surface 按钮 (在 attachEvents() 里调)
 //   v1.0.2 设计: btn-send 保持原 stop 行为 (plan §Q3 "前端 UI 不用动"),
 //   queue 走独立 btn-queue 按钮 — 跟 btn-send 解耦, 用户在 LLM 响应中也能点 queue
+//
+//   重要: btn-mode 和 btn-model 的 click handler 已有 (events.js:396 + 473),
+//   不要重复注册 — 重复注册会导致 handler 顺序触发, popover 一开一关 = 用户看不到
 export function attachControlSurface() {
   // v1.0.2: 独立 Queue 按钮 — 永远把 textarea 内容加到 mcode queue
   //   (无论 running 与否, btn-queue 都是 queue 操作 — running 时更突出)
@@ -1882,32 +1893,8 @@ export function attachControlSurface() {
       if (text) steerCurrentResponse(text)
     })
   }
-  // v1.0.2: btn-mode 弹 mode popover (plan §Q4 — 之前 hidden, 现在接通)
-  const btnMode = document.getElementById('btn-mode')
-  if (btnMode) {
-    btnMode.addEventListener('click', () => {
-      // mode 跟现有 popover 共用 (mode-popover 已存在, 复用 toggleMode)
-      // 取消 hidden 后用户点击会走现有的 popover 路径
-      try {
-        if (typeof toggleMode === 'function') toggleMode()
-      } catch (e) {
-        console.warn('[v1.0.2] btn-mode click failed:', e)
-      }
-    })
-  }
-  // v1.0.2: btn-model 弹 model selector (复用现有 /api/models)
-  const btnModel = document.getElementById('btn-model')
-  if (btnModel) {
-    btnModel.addEventListener('click', () => {
-      // 复用现有的 model selector popover (model-popover)
-      try {
-        const ev = new CustomEvent('open-model-selector')
-        document.dispatchEvent(ev)
-      } catch (e) {
-        console.warn('[v1.0.2] btn-model click failed:', e)
-      }
-    })
-  }
+  // 注意: btn-mode 和 btn-model 的 click handler 已在 attachEvents() 里绑定 (events.js:396, 473)
+  //   不要重复! 重复会导致 popover 一开一关, 用户看不到
   // 暴露到 window 方便其他模块调
   try {
     window.__webui_v102 = {
