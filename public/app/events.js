@@ -1960,12 +1960,13 @@ export function startAskCountdown(seconds = 30) {
     _askCountdownRemaining -= 1
     if (_askCountdownRemaining <= 0) {
       stopAskCountdown()
-      // 到 0 自动续接 — 调 sendAskAnswer (用户已 confirm 类问题的话用 default 选项)
+      // v1.0.2 R6 audit fix: 到 0 自动续接 — 调 askModalNextOrSend 走完整模板化 Q/A 提交
+      //   (跟用户点 send 按钮一样, 走 ASK_MODAL_STATE 模板化所有题目)
+      //   之前 sendAskAnswer({option:'default'}) 错 — sendAskAnswer 接 text 不是对象
       try {
-        // v0.5.bx-14: 默认选第一个选项, 自动续接
         const modal = document.getElementById('ask-modal')
-        if (modal && !modal.hidden && typeof sendAskAnswer === 'function') {
-          sendAskAnswer({ option: 'default' })
+        if (modal && !modal.hidden && typeof askModalNextOrSend === 'function') {
+          askModalNextOrSend()
         }
       } catch (e) {
         console.warn('[ask-countdown] auto-resume failed:', e)

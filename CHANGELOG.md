@@ -67,9 +67,10 @@ landed on the development branch but are not yet cut into a release.
 ### Test count
 
 - 435 pass / 0 fail / 1 skipped (R5 末: 415 → R6 末: 435, +20)
-- 4 个新 test 文件: `lib-acp-goal.test.js` (8) / `routes-chat-goal.test.js` (8) / `events-ask-countdown.test.js` (4)
+- 4 个新 test 文件: `lib-acp-goal.test.js` (8) / `routes-chat-goal.test.js` (8) / `events-ask-countdown.test.js` (6) — v1.0.3 audit 后从 4 增到 6
 
-### Verified (no code changes in this patch)- `npm test` — 382 passing + 1 skipped (383 total)
+### Verified (no code changes in this patch)
+- `npm test` — 435 passing + 1 skipped (436 total)
 - `npm run lint` — 0 warnings
 - `npm run validate:plugin` — 0 errors, 0 warnings
 - No tracked debug residue (`git ls-files` shows zero

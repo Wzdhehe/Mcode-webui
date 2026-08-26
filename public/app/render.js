@@ -393,8 +393,9 @@ export function renderDelegationCard() {
   if (empty) empty.hidden = true
   if (items) {
     items.innerHTML = dels.map((d) => {
-      const agent = d.agent || d.name || 'agent'
-      const status = d.status || 'active'
+      // v1.0.2 R6 audit fix: escapeHtml 防 XSS (status + agent 都从 mcode 流入)
+      const agent = escapeHtml(d.agent || d.name || 'agent')
+      const status = escapeHtml(d.status || 'active')
       return `<div class="delegation-item">
         <span class="delegation-item-status" data-status="${status}"></span>
         <span class="delegation-item-agent">${agent}</span>
