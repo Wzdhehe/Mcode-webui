@@ -196,8 +196,10 @@ export class McodeAcpClient extends EventEmitter {
   }
 
   // 队列一条消息 (LLM 响应进行中)
+  //   v1.0.2 Round 6 修: 之前 v1.0.2 误用 'session/queue' (一锅烩),
+  //   实际 mcode 0.2.4 acp 是 'session/queue/enqueue' (5 个分开 method)
   async queue(sessionId, text) {
-    return await this.request('session/queue', { sessionId, text })
+    return await this.request('session/queue/enqueue', { sessionId, text })
   }
 
   // 改写队列里某条消息
@@ -228,6 +230,41 @@ export class McodeAcpClient extends EventEmitter {
   // 改 session 维度的 config (e.g. model 切换)
   async setConfigOption(sessionId, key, value) {
     return await this.request('session/set_config_option', { sessionId, key, value })
+  }
+
+  // --- v1.0.2 Round 6: mcode 0.2.4 Goal RPC 包装 ---
+  // 4 个 sub-action (cli.js bundle grep 验证):
+  //   session/goal/get    — 拿当前 goal
+  //   session/goal/create — 创建 goal (objective + 可选 tokenBudget)
+  //   session/goal/patch  — 改 status / objective / tokenBudget
+  //   session/goal/clear  — 清空 goal
+  // 5 状态 enum (cli.js 验证): active | paused | blocked | complete | budget_limited
+
+  // 拿当前 goal (返回 {goal: {id, sessionId, objective, status, tokenBudget, used, ...} | null})
+  async goalGet(sessionId) {
+    return await this.request('session/goal/get', { sessionId })
+  }
+
+  // 创建 goal
+  //   params: { sessionId, objective, tokenBudget? }
+  //   response: { goal: {...} }
+  async goalCreate(sessionId, objective, tokenBudget) {
+    const params = { sessionId, objective }
+    if (tokenBudget !== undefined && tokenBudget !== null) {
+      params.tokenBudget = tokenBudget
+    }
+    return await this.request('session/goal/create', params)
+  }
+
+  // patch goal (改 status / objective / tokenBudget)
+  //   params: { sessionId, status?, objective?, tokenBudget? }
+  async goalPatch(sessionId, fields) {
+    return await this.request('session/goal/patch', { sessionId, ...fields })
+  }
+
+  // 清空 goal
+  async goalClear(sessionId) {
+    return await this.request('session/goal/clear', { sessionId })
   }
 
   // 发 prompt + 等 stopReason + 收集 thinking/answer
