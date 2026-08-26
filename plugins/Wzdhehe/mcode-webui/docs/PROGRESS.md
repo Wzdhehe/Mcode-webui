@@ -4,7 +4,7 @@
 > 上游 mcode TUI: https://github.com/MiniMax-AI/MiniMax-Code (CHANGELOG.md)
 > 下游 webui: 本仓库
 
-**最后更新**: 2026-08-26 (Round 5 完成, 3 commit 落地待 push)
+**最后更新**: 2026-08-26 (Round 6 完成, 累计 R5+R6 10 commit 落地待 push)
 
 ---
 
@@ -58,11 +58,23 @@
 
 ## 待办 (Backlog)
 
-### Round 6 — Goal 完整功能 (1-2 周)
+### Round 6 — v1.0.3 完成 (2026-08-26, 累计 R5+R6 10 commit 落地)
 
-- chat 顶部 Goal budget bar (progress bar: used/total)
-- chat 顶部 Goal status badge (5 状态 enum)
-- Goal 自动结算 toast (`status='complete'` 或 `'budget_limited'`)
+- ✅ acp.mjs: 加 4 个 session/goal RPC (`goalGet`/`goalCreate`/`goalPatch`/`goalClear`) + 修 v1.0.2 queue() 方法名错 (R5 误用 'session/queue', R6 修 'session/queue/enqueue')
+- ✅ server/lib/state-bus.js: GOAL_STATUSES 导出 (5 状态 enum, 跟 mcode 内部同步)
+- ✅ server/routes/chat.js: 4 个 handleGoal* handler (Create/Patch/Clear/Get) + withMcodeSession helper
+- ✅ server/router.js: POST/PATCH/DELETE/GET /api/chat/goal 4 条路由
+- ✅ client: renderGoalBudgetBar + renderDelegationCard (state.goalBudget/activeDelegations)
+- ✅ client: openAskModal/closeAskModal 启动/停 30s 倒计时
+- ✅ client: 3 个新 DOM 节点 (goal-bar / delegation-card / ask-countdown)
+- ✅ client: ~125 行新 CSS (5 状态色 / 子任务 dot / 倒计时 banner)
+- ✅ 18 条新 i18n key (zh + en)
+- ✅ Goal 自动结算 toast (sessionStorage 防重弹)
+- ✅ 20 个新单测 (lib-acp-goal 8 + routes-chat-goal 8 + events-ask-countdown 4)
+- ✅ 修 server-startup.test.js 用 PORT=8090 避免冲突
+- ✅ Lint 0 warning, 435/0/1 pass
+- ⏳ 独立 verifier audit (R6 待派, 按 superpowers requesting-code-review skill 走)
+- ⏳ 不 push (等用户说"推", 5 个 round 全部做完才推 fork main, 用户决策 v3)
 - Goal 独立验证展示 (LLM-as-judge 推 `goal_update` 带 verifyResult)
 - Ask 等待自动继续时展示倒计时 (mcode 0.2.4 changelog 说有, 客户端兜底 30s)
 - 验证 mcode 0.2.4 真实 acp method `session/goal` 的 sub-actions (get/create/settle/verify) shape

@@ -41,9 +41,35 @@ landed on the development branch but are not yet cut into a release.
   corrected from the non-existent `hetaoBackend/MiniMax-Code-Plugins`
   to the official `MiniMax-AI/MiniMax-Code-Plugins`.
 
-### Verified (no code changes in this patch)
+## v1.0.3 (2026-08-26) — mcode 0.2.4 Goal 完整功能
 
-- `npm test` — 382 passing + 1 skipped (383 total)
+> R6 实施: Round 6 Goal 完整功能 (chat 顶部 budget bar + 5 状态 + 倒计时 + delegation card)。
+> 累计 5+ commit (3 feat + 2 chore), 20 个新单测。
+
+### Added
+
+- **session/goal RPC 4 个**: `goalGet` / `goalCreate` / `goalPatch` / `goalClear` (cli.js bundle 验证真实 method 名)
+- **Goal 5 状态 enum** (server/lib/state-bus.js `GOAL_STATUSES`): `active | paused | blocked | complete | budget_limited`
+- **4 个 server endpoint**: `POST /api/chat/goal` (create) / `PATCH` (patch) / `DELETE` (clear) / `GET` (get)
+- **客户端 Goal budget bar**: chat 顶部 progress bar + 5 状态色 badge, mcode `session/goal_update` 通知时实时更新
+- **Delegation card**: chat 顶部子任务快照 (mcode `session/delegation_update` 通知时刷新)
+- **Ask 倒计时**: Ask modal 打开时启动 30s 倒计时, 到 0 自动调 `sendAskAnswer` 走默认选项 (mcode 0.2.4 文档没列 countdown, 客户端兜底)
+- **Goal 自动结算 toast**: 收到 `status='complete'` 或 `'budget_limited'` 时弹一次 toast (sessionStorage 防重弹)
+
+### Fixed
+
+- **Round 5 queue() 方法名错**: 之前 v1.0.2 Round 5 误用 `session/queue` (一锅烩), 实际 mcode 0.2.4 acp 是 `session/queue/enqueue` (5 个分开 method)。本次修。
+
+### Changed
+
+- **server-startup.test.js**: 用 `PORT=8090` 避免跟开发 server (8080) 冲突
+
+### Test count
+
+- 435 pass / 0 fail / 1 skipped (R5 末: 415 → R6 末: 435, +20)
+- 4 个新 test 文件: `lib-acp-goal.test.js` (8) / `routes-chat-goal.test.js` (8) / `events-ask-countdown.test.js` (4)
+
+### Verified (no code changes in this patch)- `npm test` — 382 passing + 1 skipped (383 total)
 - `npm run lint` — 0 warnings
 - `npm run validate:plugin` — 0 errors, 0 warnings
 - No tracked debug residue (`git ls-files` shows zero
