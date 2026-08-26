@@ -4,7 +4,7 @@
 import { applyI18n, applyTheme } from './i18n.js'
 import { API_SUFFIX, HEADERS, state, connect, renderUsagePopover, refreshSessions, refreshUsage, setState } from './state.js'
 import { render, DISMISSED_QUESTIONS, loadAskUserAnswers } from './render.js'
-import { attachEvents, attachModalEvents, attachControlSurface } from './events.js'
+import { attachEvents, attachModalEvents, attachControlSurface, attachGoalBar } from './events.js'
 
 
 // ============================================================
@@ -35,6 +35,8 @@ function init() {
   attachEvents()
   // v1.0.2: mcode 0.2.4 control surface 按钮绑定
   attachControlSurface()
+  // v1.0.2 Round 6: Goal budget bar 顶部交互 (清空按钮)
+  attachGoalBar()
   // Fetch initial state
   console.log('[webui] init: fetch /api/state')
   fetch('/api/state' + API_SUFFIX, { headers: HEADERS })

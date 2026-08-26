@@ -3229,3 +3229,125 @@ body.is-remote .btn-lan-toggle { display: none; }
   color: var(--text-primary);
 }
 #btn-model:hover { background: var(--bg-hover, #f1f3f4); }
+
+/* ============================================================ */
+/* v1.0.2 Round 6: Goal budget bar (chat 顶部)                  */
+/* ============================================================ */
+.goal-bar {
+  padding: 10px 16px;
+  margin: 8px 0;
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border, #dadce0);
+  border-radius: 8px;
+}
+.goal-bar-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.goal-bar-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.goal-bar-status {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent-soft, #e8f0fe);
+  color: var(--accent, #1a73e8);
+}
+.goal-bar-status[data-status="paused"]    { background: #fff3cd; color: #b8860b; }
+.goal-bar-status[data-status="blocked"]   { background: #fce8e6; color: #d93025; }
+.goal-bar-status[data-status="complete"]  { background: #d4edda; color: #137333; }
+.goal-bar-status[data-status="budget_limited"] { background: #f8d7da; color: #a94442; }
+.goal-bar-clear {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.goal-bar-clear:hover { color: var(--danger, #d93025); }
+.goal-bar-progress {
+  height: 8px;
+  background: var(--bg-hover, #f1f3f4);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.goal-bar-fill {
+  height: 100%;
+  background: var(--accent, #1a73e8);
+  transition: width 0.3s;
+}
+.goal-bar-fill[data-status="complete"]        { background: #137333; }
+.goal-bar-fill[data-status="budget_limited"]  { background: #d93025; }
+.goal-bar-fill[data-status="paused"]          { background: #b8860b; }
+.goal-bar-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: right;
+}
+
+/* Delegation card (子任务快照) */
+.delegation-card {
+  padding: 8px 16px;
+  margin: 4px 0;
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border, #dadce0);
+  border-radius: 8px;
+}
+.delegation-card-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.delegation-card-items { padding: 4px 0; }
+.delegation-card-empty {
+  padding: 4px 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.delegation-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.delegation-item-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent, #1a73e8);
+  flex-shrink: 0;
+}
+.delegation-item-status[data-status="complete"]   { background: #137333; }
+.delegation-item-status[data-status="blocked"]    { background: #d93025; }
+.delegation-item-status[data-status="failed"]     { background: #80868b; }
+.delegation-item-agent { color: var(--text-secondary); }
+
+/* Ask 倒计时 (modal 顶部小标签) */
+.ask-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  margin: 6px 0;
+  background: #fff3cd;
+  border: 1px solid #ffeeba;
+  border-radius: 12px;
+  font-size: 12px;
+  color: #856404;
+}
+.ask-countdown-seconds {
+  font-weight: 600;
+  color: #b8860b;
+}

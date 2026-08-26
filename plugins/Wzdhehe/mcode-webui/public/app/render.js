@@ -5,7 +5,7 @@
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
 import { setLeftOpen, setRightOpen, API_SUFFIX, sidebarReady, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, connect, es, getGeneralQuota, leftOpen, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
-import { SLASH_COMMANDS, SLASH_SKILLS, attachEvents, attachModalEvents, attachedFiles, attachmentList, autoResize, checkModals, fileInput, filterSlash, hideMode, hidePerm, hidePlan, hidePlanMode, hideSettings, hideSlash, isSending, lastShownPermKey, lastShownPlanKey, lastShownPlanModeKey, modeOpen, modePopover, moveSlash, permOpen, planModeOpen, planOpen, planSending, removeAttachment, renderAttachments, renderPerm, renderPlan, selectSlash, send, sendPermAnswer, sendPlanAnswer, sendPlanModeAnswer, setMode, settingsMenu, showPerm, showPlan, showPlanMode, showSlash, slashActiveIdx, slashFiltered, slashInput, slashOpen, slashOverlay, slashQuery, slashResults, stopExec, toggleLang, toggleMode, toggleSettings, uploadFiles } from './events.js'
+import { SLASH_COMMANDS, SLASH_SKILLS, attachEvents, attachModalEvents, attachedFiles, attachmentList, autoResize, checkModals, fileInput, filterSlash, hideMode, hidePerm, hidePlan, hidePlanMode, hideSettings, hideSlash, isSending, lastShownPermKey, lastShownPlanKey, lastShownPlanModeKey, modeOpen, modePopover, moveSlash, permOpen, planModeOpen, planOpen, planSending, removeAttachment, renderAttachments, renderPerm, renderPlan, selectSlash, send, sendPermAnswer, sendPlanAnswer, sendPlanModeAnswer, setMode, settingsMenu, showPerm, showPlan, showPlanMode, showSlash, slashActiveIdx, slashFiltered, slashInput, slashOpen, slashOverlay, slashQuery, slashResults, stopExec, startAskCountdown, stopAskCountdown, toggleLang, toggleMode, toggleSettings, uploadFiles } from './events.js'
 
 // v0.5.ax: 欢迎页时隐藏右侧栏（chat-area 居中铺满）
 export function hideRightForWelcome(isWelcome) {
@@ -164,8 +164,12 @@ export function render() {
   // Context right (real-time usage + TPS)
   renderContext()
 
-  // Goal (dynamic)
+  // Goal (dynamic, legacy cs.goal shape)
   renderGoal()
+
+  // v1.0.2 Round 6: Goal budget bar (新 shape: cs.goalBudget) + Delegation card
+  renderGoalBudgetBar()
+  renderDelegationCard()
 
   // Todo (dynamic)
   renderTodo()
@@ -324,6 +328,78 @@ export function renderGoal() {
     document.getElementById('r-goal-duration').textContent = g.duration ? `已运行 ${g.duration}` : ''
   } else {
     section.hidden = true
+  }
+}
+
+// v1.0.2 Round 6: 新 Goal budget bar (state.goalBudget 形状, 跟旧 state.goal 不同)
+//   state.goalBudget = { used, total, status: 'active'|'paused'|'blocked'|'complete'|'budget_limited' }
+export function renderGoalBudgetBar() {
+  const bar = document.getElementById('goal-bar')
+  if (!bar) return
+  const g = state?.goalBudget
+  if (!g) {
+    bar.hidden = true
+    return
+  }
+  const status = g.status || 'active'
+  const used = Number(g.used) || 0
+  const total = Number(g.total) || 0
+  const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0
+  const statusText = t(`goal_budget_status_${status}`) || status
+  bar.hidden = false
+  const fill = document.getElementById('goal-bar-fill')
+  if (fill) {
+    fill.style.width = `${pct}%`
+    fill.setAttribute('data-status', status)
+  }
+  const statusEl = document.getElementById('goal-bar-status')
+  if (statusEl) {
+    statusEl.textContent = statusText
+    statusEl.setAttribute('data-status', status)
+  }
+  const usageEl = document.getElementById('goal-bar-usage')
+  if (usageEl) {
+    usageEl.textContent = `${used} / ${total} (${pct}%)`
+  }
+  // 完成 / budget_limited 状态弹 toast (一次, 用 sessionStorage 标记防重弹)
+  if (status === 'complete') showGoalToastOnce('complete', t('goal_complete_toast'))
+  else if (status === 'budget_limited') showGoalToastOnce('budget_limited', t('goal_budget_limited_toast'))
+}
+
+function showGoalToastOnce(key, msg) {
+  try {
+    const flag = 'webui_goal_toast_' + key
+    if (sessionStorage.getItem(flag)) return
+    sessionStorage.setItem(flag, '1')
+    if (typeof showToast === 'function') showToast(msg, 4000)
+  } catch {}
+}
+
+// v1.0.2 Round 6: Delegation card (子任务快照)
+//   state.activeDelegations = [{ delegationId, agent, status, ... }]
+export function renderDelegationCard() {
+  const card = document.getElementById('delegation-card')
+  if (!card) return
+  const dels = Array.isArray(state?.activeDelegations) ? state.activeDelegations : []
+  const items = document.getElementById('delegation-card-items')
+  const empty = card.querySelector('.delegation-card-empty')
+  if (dels.length === 0) {
+    if (items) items.innerHTML = ''
+    if (empty) empty.hidden = false
+    card.hidden = true
+    return
+  }
+  card.hidden = false
+  if (empty) empty.hidden = true
+  if (items) {
+    items.innerHTML = dels.map((d) => {
+      const agent = d.agent || d.name || 'agent'
+      const status = d.status || 'active'
+      return `<div class="delegation-item">
+        <span class="delegation-item-status" data-status="${status}"></span>
+        <span class="delegation-item-agent">${agent}</span>
+      </div>`
+    }).join('')
   }
 }
 
@@ -1213,6 +1289,11 @@ export function openAskModal(pq, opts) {
   const inputArea = document.querySelector('.input-area')
   if (inputArea) inputArea.style.display = 'none'
   renderAskModalContent()
+  // v1.0.2 Round 6: 启动 30s 倒计时 (mcode 0.2.4 文档没列 countdown 事件, 客户端兜底)
+  //   到 0 自动调 sendAskAnswer (用 default 选项, 走 askModalNextOrSend 模板化)
+  if (typeof startAskCountdown === 'function') {
+    try { startAskCountdown(30) } catch (e) { console.warn('[ask] start countdown:', e) }
+  }
 }
 
 export function closeAskModal() {
@@ -1229,6 +1310,10 @@ export function closeAskModal() {
   // 清空 other input
   const other = document.getElementById('ask-modal-other')
   if (other) other.value = ''
+  // v1.0.2 Round 6: 关弹窗时停倒计时
+  if (typeof stopAskCountdown === 'function') {
+    try { stopAskCountdown() } catch (e) { console.warn('[ask] stop countdown:', e) }
+  }
   // v0.5.bx-28: 防御性清 pendingAskUser — 任何关弹窗路径 (X / Esc / 背景 / 切会话) 都要清,
   //   否则 send() 会把后续正常消息包成 Q/A 模板 ("Q: <question>\nA: <user input>")
   //   X / Esc / 背景 现在都绑 closeAskModal (不再过 askModalSkip), 语义是"我放弃这题, 让我正常发消息"

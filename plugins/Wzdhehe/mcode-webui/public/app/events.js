@@ -1910,3 +1910,93 @@ export function attachControlSurface() {
   } catch {}
 }
 
+// v1.0.2 Round 6: Goal 6 个 REST 客户端 + Goal clear 按钮 + Ask 倒计时
+//   - createGoal / patchGoal / clearGoal / getGoal 调 /api/chat/goal
+//   - Ask modal 倒计时: 30s 客户端兜底 (mcode 0.2.4 文档没列, 实际可能不暴露)
+export async function createGoal(objective, tokenBudget) {
+  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...HEADERS },
+    body: JSON.stringify({ objective, ...(tokenBudget ? { tokenBudget } : {}) }),
+  })
+  return r.json().catch(() => ({}))
+}
+export async function patchGoal(fields) {
+  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...HEADERS },
+    body: JSON.stringify(fields),
+  })
+  return r.json().catch(() => ({}))
+}
+export async function clearGoal() {
+  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', ...HEADERS },
+  })
+  return r.json().catch(() => ({}))
+}
+export async function getGoal() {
+  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
+    method: 'GET',
+    headers: { ...HEADERS },
+  })
+  return r.json().catch(() => ({}))
+}
+
+// Ask modal 30s 倒计时 (客户端兜底)
+//   bindAskModal 打开 ask-modal 时调 startAskCountdown(); 关闭时调 stopAskCountdown()
+let _askCountdownTimer = null
+let _askCountdownRemaining = 0
+export function startAskCountdown(seconds = 30) {
+  stopAskCountdown()
+  const banner = document.getElementById('ask-countdown')
+  const secondsEl = document.getElementById('ask-countdown-seconds')
+  if (!banner || !secondsEl) return
+  _askCountdownRemaining = seconds
+  banner.hidden = false
+  secondsEl.textContent = String(_askCountdownRemaining)
+  _askCountdownTimer = setInterval(() => {
+    _askCountdownRemaining -= 1
+    if (_askCountdownRemaining <= 0) {
+      stopAskCountdown()
+      // 到 0 自动续接 — 调 sendAskAnswer (用户已 confirm 类问题的话用 default 选项)
+      try {
+        // v0.5.bx-14: 默认选第一个选项, 自动续接
+        const modal = document.getElementById('ask-modal')
+        if (modal && !modal.hidden && typeof sendAskAnswer === 'function') {
+          sendAskAnswer({ option: 'default' })
+        }
+      } catch (e) {
+        console.warn('[ask-countdown] auto-resume failed:', e)
+      }
+      return
+    }
+    secondsEl.textContent = String(_askCountdownRemaining)
+  }, 1000)
+}
+export function stopAskCountdown() {
+  if (_askCountdownTimer) {
+    clearInterval(_askCountdownTimer)
+    _askCountdownTimer = null
+  }
+  const banner = document.getElementById('ask-countdown')
+  if (banner) banner.hidden = true
+}
+
+// 绑定 Goal 顶部交互 (清空按钮)
+export function attachGoalBar() {
+  const clearBtn = document.getElementById('goal-bar-clear')
+  if (clearBtn) {
+    clearBtn.addEventListener('click', async () => {
+      if (!confirm(t('goal_clear_confirm'))) return
+      try {
+        await clearGoal()
+        if (typeof showToast === 'function') showToast(t('goal_clear_btn'))
+      } catch (e) {
+        console.warn('[goal-bar] clear failed:', e)
+      }
+    })
+  }
+}
+
