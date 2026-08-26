@@ -45,7 +45,7 @@ node server.js
 
    ```js
    // server/routes/foo.js
-   import { pushStateFor, pushEvent, getClient } from '../lib/state-bus.js'
+   import { pushStateFor, getClient } from '../lib/state-bus.js'
    import { fail, ok } from '../lib/util.js'  // if you have one
 
    export async function handleFoo(req, res, ctx, pathname) {
@@ -59,8 +59,7 @@ node server.js
 
      // if it mutates state:
      pushStateFor(cid, { /* delta */ })
-     // if it's a fire-and-forget event:
-     pushEvent(cid, { type: 'foo', … })
+     // for one-off SSE messages, see `pushOnlineCount` / `broadcastTokenRotated`
 
      return ok(res, { /* response */ })
    }
@@ -99,8 +98,9 @@ node server.js
    ```js
    yield { type: 'foo', … }
    ```
-3. The transport layer pushes events via `pushEvent(cid, event)` which
-   goes onto the SSE channel.
+3. The transport layer pushes events via `pushStateFor(cid, …)` (state
+   snapshots) or `broadcastTokenRotated(token)` (one-off event) which
+   go onto the SSE channel.
 4. In `public/app/main.js`, handle the event in the SSE message
    handler in `connect()` and update `state.foo` accordingly.
 5. If the event needs UI, add a render function `renderFoo()` and call

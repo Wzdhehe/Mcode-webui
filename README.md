@@ -113,7 +113,7 @@ npm run package:plugin    # dist/Wzdhehe/mcode-webui/ + .zip
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). `npm test` (302 tests) and
+See [CONTRIBUTING.md](CONTRIBUTING.md). `npm test` (382 passing + 1 skipped) and
 `npm run lint` must stay green; plugin-tree copies sync from root.
 
 ## License

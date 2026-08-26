@@ -25,7 +25,7 @@ Clone and run:
 git clone https://github.com/Wzdhehe/Mcode-webui.git
 cd Mcode-webui
 npm install               # only devDeps (eslint, prettier, c8)
-npm test                  # 302 unit tests
+npm test                  # 382 unit tests + 1 skipped (383 total)
 npm run lint              # eslint flat config, must be 0 warnings
 npm run dev               # node server.js
 # → http://127.0.0.1:8080/
@@ -110,7 +110,7 @@ practice; log + continue.
 
 ## Pull request checklist
 
-- [ ] `npm test` passes (302/302)
+- [ ] `npm test` passes (382 + 1 skipped)
 - [ ] `npm run lint` is clean (0 warnings)
 - [ ] `npm run validate:plugin` is clean (mirrors official gate)
 - [ ] Plugin tree (`plugins/.../Mcode-webui/`) is in sync with root

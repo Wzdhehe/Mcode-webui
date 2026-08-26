@@ -43,7 +43,7 @@ landed on the development branch but are not yet cut into a release.
 
 ### Verified (no code changes in this patch)
 
-- `npm test` — 302/302 pass
+- `npm test` — 382 passing + 1 skipped (383 total)
 - `npm run lint` — 0 warnings
 - `npm run validate:plugin` — 0 errors, 0 warnings
 - No tracked debug residue (`git ls-files` shows zero

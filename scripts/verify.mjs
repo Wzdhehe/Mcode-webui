@@ -4,7 +4,7 @@
 // Full pre-flight check for shipping the mcode-webui plugin.
 // Runs in order:
 //   1. validate-plugin   (plugin.json + SKILL.md + README + LICENSE + symlinks + BOM + TODO)
-//   2. npm test          (290+ unit tests, must all pass)
+//   2. npm test          (382 unit tests + 1 skipped, must all pass)
 //   3. npm run lint      (ESLint, 0 warnings)
 //   4. npm run package:plugin  (rebuild dist/ zip)
 //
