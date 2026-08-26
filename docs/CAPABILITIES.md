@@ -193,7 +193,7 @@ for the historical list and the response from the mcode team.
 > 适配目标: mcode TUI 0.2.4 (2026-08-24) 新增的 Session 控制面。
 > **硬性要求**: webui v1.0.2 需要 mcode >= 0.2.4。启动时版本检查 fail-fast。
 
-### 14.1 Session control RPC 适配 (5 个新方法)
+### 14.1 Session control RPC 适配 (10 个新方法)
 
 | mcode 0.2.4 acp 方法 | webui 路由 | 功能 | UI 体现 |
 |---|---|---|---|

@@ -33,11 +33,14 @@
 - ✅ client: i18n.js 加 25 条双语 key
 - ✅ client: index.html 加 queue-badge + btn-steer DOM 节点
 - ✅ client: main.css 加 queue-badge / btn-steer / 恢复 btn-mode 样式
-- ✅ 23 个新单测 (state-bus 7 / routes 10 / acp RPC 4 / version check 3)
+- ✅ 23 个新单测 (state-bus 7 / routes 9 / acp RPC 4 / version check 3)
+- ✅ 26 条双语 i18n key (fork/queue/steer/cancel/resume/mode/btn-plus/runtime)
 - ✅ Lint 0 warning
 - ✅ 测试 410 pass / 0 fail / 1 skipped
 - ✅ 文档: CHANGELOG v1.0.2 + CAPABILITIES §14 + PROGRESS.md (本文件)
 - ✅ 3 commit (3f124e7 feat / e0744df docs / c973f5e mirror) 落地
+- ✅ 独立 verifier 2-axis audit (dispatched mavis subagent)
+- ✅ 修审计发现: C1 handleStop 改用 McodeAcpClient / C2 mirror PROGRESS 同步 / I1 mcode-acp 调 broadcast / I2 btn-send stop 行为恢复 + btn-queue 独立入口 / I3 §14.1 标题 5→10 / I4 mcode-rpc UNSUPPORTED 清理 / M3 补 2 个新 test / M1+M2 PROGRESS 数字
 - ⏳ **不 push** (等用户说"推", 推后会触发 PR #16 自动更新)
 
 ---

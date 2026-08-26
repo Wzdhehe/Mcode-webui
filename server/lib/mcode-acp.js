@@ -9,6 +9,10 @@ import {
   clearActiveChild,
   pushStateFor,
   getCidsByMcodeSession,
+  broadcastQueueUpdate,
+  broadcastGoalUpdate,
+  broadcastDelegationUpdate,
+  broadcastCurrentSessionUpdate,
 } from "./state-bus.js";
 import { applyMavisUsageToCs } from "./mavis-usage.js";
 import {
@@ -426,18 +430,19 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
           // v1.0.2: mcode 0.2.4 发 goal_update, 新 shape 是 { used, total, status } (5 状态)
           // 旧 mcode 0.1.5 可能发 { active, text, duration } shape — 两套都支持
           const u = c.update;
-          // 新 shape: 设置 cs.goalBudget
+          // 新 shape: 走 broadcast (per-mcode-session 跨 cid 同步)
           if (typeof u.used === "number" || typeof u.total === "number" || u.status) {
-            cs.goalBudget = {
+            const goal = {
               used: typeof u.used === "number" ? u.used : 0,
               total: typeof u.total === "number" ? u.total : 0,
               status: u.status || "active",
             };
+            broadcastGoalUpdate(cid, goal);
             console.log(
-              `[goal.update] cid=${cid} status=${cs.goalBudget.status} used=${cs.goalBudget.used}/${cs.goalBudget.total}`,
+              `[goal.update] cid=${cid} status=${goal.status} used=${goal.used}/${goal.total}`,
             );
           } else {
-            // 旧 shape: 设置 cs.goal (active/text/duration)
+            // 旧 shape: 直接 mutate cs.goal (legacy per-cid 字段)
             cs.goal = {
               active: !!u.active,
               text: u.text || u.description || null,
@@ -483,9 +488,10 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
         } else if (c.kind === "queue_update" && c.update) {
           // v1.0.2: mcode 0.2.4 队列状态变化
           // 典型 payload: { sessionId, items: [{ itemId, text, createdAt }] }
+          // 走 broadcastQueueUpdate → per-mcode-session 跨 cid 同步 (手机 + 电脑开同一 session)
           const u = c.update;
           const items = Array.isArray(u.items) ? u.items : [];
-          cs.mcodeQueue = items;
+          broadcastQueueUpdate(cid, items);
           console.log(
             `[queue.update] cid=${cid} items=${items.length} mvsId=${cs.mcodeSessionId}`,
           );
@@ -494,7 +500,7 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
           // 典型 payload: { sessionId, delegations: [{ delegationId, agent, status, ... }] }
           const u = c.update;
           const dels = Array.isArray(u.delegations) ? u.delegations : [];
-          cs.activeDelegations = dels;
+          broadcastDelegationUpdate(cid, dels);
           console.log(
             `[delegation.update] cid=${cid} delegations=${dels.length}`,
           );
@@ -502,15 +508,14 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
           // v1.0.2: mcode 0.2.4 当前 session 切换 (resume / switch 触发)
           // 典型 payload: { sessionId, title }
           const u = c.update;
-          if (u && u.sessionId) {
-            cs.mcodeSessionId = u.sessionId;
-            console.log(
-              `[current.session.update] cid=${cid} → mvsId=${u.sessionId}`,
-            );
-          }
-          if (u && u.title) {
-            cs.sessionTitle = u.title;
-          }
+          // 用 broadcast 走完整 cid 桥接 (会更新 cs.mcodeSessionId + 推给所有同 session 的 cid)
+          broadcastCurrentSessionUpdate(cid, {
+            mcodeSessionId: u && u.sessionId ? u.sessionId : null,
+            title: u && u.title ? u.title : null,
+          });
+          console.log(
+            `[current.session.update] cid=${cid} → mvsId=${u && u.sessionId}`,
+          );
         } else if (c.kind === "other" && c.update) {
           const u = c.update;
           if (u && u.sessionUpdate) {

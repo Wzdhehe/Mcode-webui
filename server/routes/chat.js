@@ -159,21 +159,26 @@ export async function handleStop(_req, res, ctx) {
   const wasRunning = !!child;
   let cancelled = false;
   let hardKilled = false;
-  // 1. 温和路径: 调 session/cancel RPC
-  //    mcode 0.1.5 不支持 — r.ok=false, code='unsupported'
+  // 1. 温和路径: 调 mcode acp session/cancel RPC
+  //    v1.0.2 改用真 McodeAcpClient (acp.mjs) 替代 mcode-rpc.js 的 UNSUPPORTED 占位
+  //    mcode 0.2.4 acp 真正支持 session/cancel (cli.js grep 验证)
   if (cs && cs.mcodeSessionId) {
     try {
-      const { cancelSession } = await import("../lib/mcode-rpc.js");
-      const r = await cancelSession(cs.mcodeSessionId);
-      if (r.ok) cancelled = true;
-      else if (r.code !== "unsupported") {
-        // 真错 (不是不支持) — 记下来排查
-        console.warn(
-          `[stop] session/cancel failed cid=${cid}: ${r.error} (code=${r.code})`,
-        );
+      const { McodeAcpClient } = await import("../../acp.mjs");
+      const client = new McodeAcpClient({ debug: false });
+      try {
+        await client.start();
+        await client.cancel(cs.mcodeSessionId);
+        cancelled = true;
+        console.log(`[stop] session/cancel OK cid=${cid} mvsId=${cs.mcodeSessionId}`);
+      } finally {
+        client.stop();
       }
     } catch (e) {
-      console.warn(`[stop] session/cancel threw cid=${cid}: ${e.message}`);
+      // 真错 (mcode 0.2.4 应该支持, 任何失败都记下来排查)
+      console.warn(
+        `[stop] session/cancel failed cid=${cid} mvsId=${cs.mcodeSessionId}: ${e.message}`,
+      );
     }
   }
   // 2. 兜底路径: hard kill child (RPC 不支持或失败)

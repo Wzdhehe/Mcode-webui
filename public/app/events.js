@@ -1852,28 +1852,60 @@ export async function resumeMostRecent() {
 }
 
 // 绑定 v1.0.2 control surface 按钮 (在 attachEvents() 里调)
+//   v1.0.2 设计: btn-send 保持原 stop 行为 (plan §Q3 "前端 UI 不用动"),
+//   queue 走独立 btn-queue 按钮 — 跟 btn-send 解耦, 用户在 LLM 响应中也能点 queue
 export function attachControlSurface() {
-  // Send 按钮: 响应中变成 "Queue" 模式
-  const btnSend = document.getElementById('btn-send')
-  if (btnSend) {
-    btnSend.addEventListener('click', (e) => {
-      // 响应进行中: 走 queue 路径 (state.running.active 决定)
-      try {
-        const s = window.__webui_state || null
-        if (s && s.running && s.running.active) {
-          e.preventDefault()
-          e.stopImmediatePropagation()
-          queueCurrentMessage()
-        }
-      } catch {}
-    }, true) // capture 阶段, 在 events.js 的 send() 之前拦截
+  // v1.0.2: 独立 Queue 按钮 — 永远把 textarea 内容加到 mcode queue
+  //   (无论 running 与否, btn-queue 都是 queue 操作 — running 时更突出)
+  const btnQueue = document.getElementById('btn-queue')
+  if (btnQueue) {
+    btnQueue.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      queueCurrentMessage()
+    })
   }
-  // 顶栏 Steer 按钮 (LLM 响应中可见)
+  // v1.0.2: queue badge 展开/收起队列列表
+  const queueBadge = document.getElementById('queue-badge')
+  if (queueBadge) {
+    queueBadge.addEventListener('click', (e) => {
+      e.preventDefault()
+      const list = document.getElementById('queue-list')
+      if (list) list.hidden = !list.hidden
+    })
+  }
+  // v1.0.2: 顶栏 Steer 按钮 (LLM 响应中可见)
   const btnSteer = document.getElementById('btn-steer')
   if (btnSteer) {
     btnSteer.addEventListener('click', () => {
       const text = prompt(t('steer_input_placeholder'))
       if (text) steerCurrentResponse(text)
+    })
+  }
+  // v1.0.2: btn-mode 弹 mode popover (plan §Q4 — 之前 hidden, 现在接通)
+  const btnMode = document.getElementById('btn-mode')
+  if (btnMode) {
+    btnMode.addEventListener('click', () => {
+      // mode 跟现有 popover 共用 (mode-popover 已存在, 复用 toggleMode)
+      // 取消 hidden 后用户点击会走现有的 popover 路径
+      try {
+        if (typeof toggleMode === 'function') toggleMode()
+      } catch (e) {
+        console.warn('[v1.0.2] btn-mode click failed:', e)
+      }
+    })
+  }
+  // v1.0.2: btn-model 弹 model selector (复用现有 /api/models)
+  const btnModel = document.getElementById('btn-model')
+  if (btnModel) {
+    btnModel.addEventListener('click', () => {
+      // 复用现有的 model selector popover (model-popover)
+      try {
+        const ev = new CustomEvent('open-model-selector')
+        document.dispatchEvent(ev)
+      } catch (e) {
+        console.warn('[v1.0.2] btn-model click failed:', e)
+      }
     })
   }
   // 暴露到 window 方便其他模块调

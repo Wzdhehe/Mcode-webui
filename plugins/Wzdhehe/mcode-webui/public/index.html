@@ -266,6 +266,11 @@
                 <span id="model-label">—</span>
                 <svg class="icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
               </button>
+              <!-- v1.0.2: btn-queue 独立 queue 入口 (任何时候都能点, 把 textarea 内容加入 mcode 队列)
+                   跟 btn-send 解耦 — btn-send 在 running 时是 stop, btn-queue 永远是 queue -->
+              <button class="btn-tool btn-queue" id="btn-queue" title="加入队列" data-i18n-title="queue_button">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="15" y2="18"/></svg>
+              </button>
               <button class="btn-send" id="btn-send" title="发送 (Enter)">
                 <svg class="icon icon-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
                 <svg class="icon icon-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>

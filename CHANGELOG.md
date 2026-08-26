@@ -72,7 +72,7 @@ landed on the development branch but are not yet cut into a release.
 - **Delegation 字段 (Round 6 基础)**: `cs.activeDelegations` 数组
 - **6 个新 cs 字段** + **6 个 broadcast 函数** + **4 个新 sessionUpdate 事件** (queue_update / goal_update / delegation_update / current_session_update)
 - **`docs/PROGRESS.md`** (用户决策新增) — 跟踪 Round 5/6/7/8 进度 + 未来计划
-- **23 个新单测** (state-bus 7 / routes 10 / acp RPC 4 / version check 3, 含 doc-vs-code audit 修复)
+- **23 个新单测** (state-bus 7 / routes 9 / acp RPC 4 / version check 3, 含 doc-vs-code audit 修复)
 
 ### Changed
 

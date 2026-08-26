@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { setupMocks, absPath } from "./_setup.js";
 
-let handleQueue, handleSteer, handleSetMode, handleSetConfigOption;
+let handleQueue, handleQueueUpdate, handleQueueDelete, handleSteer, handleSetMode, handleSetConfigOption;
 let getClient;
 
 function fakeReq(body) {
@@ -58,6 +58,8 @@ before(async (t) => {
   const chatRoute = await import(absPath("routes/chat.js"));
   const stateBus = await import(absPath("lib/state-bus.js"));
   handleQueue = chatRoute.handleQueue;
+  handleQueueUpdate = chatRoute.handleQueueUpdate;
+  handleQueueDelete = chatRoute.handleQueueDelete;
   handleSteer = chatRoute.handleSteer;
   handleSetMode = chatRoute.handleSetMode;
   handleSetConfigOption = chatRoute.handleSetConfigOption;
@@ -84,6 +86,48 @@ describe("v1.0.2: handleQueue / handleQueueUpdate / handleQueueDelete", () => {
     assert.equal(res._status, 200);
     assert.equal(res._body.ok, true);
     assert.equal(res._body.item.text, "再查一下 Y");
+  });
+
+  test("handleQueueUpdate 缺 itemId/text → 400", async () => {
+    const cs = getClient("test-qu-1");
+    cs.mcodeSessionId = "mvs-qu-1";
+    const req = fakeReq({}); // 无 itemId/text
+    const res = fakeRes();
+    await handleQueueUpdate(req, res, { cid: "test-qu-1", cs });
+    assert.equal(res._status, 400);
+    assert.match(res._body.error, /itemId and text required/);
+  });
+
+  test("handleQueueUpdate 调 acp.queueUpdate + 返回 item", async () => {
+    const cs = getClient("test-qu-2");
+    cs.mcodeSessionId = "mvs-qu-2";
+    const req = fakeReq({ itemId: "q-1", text: "改写后" });
+    const res = fakeRes();
+    await handleQueueUpdate(req, res, { cid: "test-qu-2", cs });
+    assert.equal(res._status, 200);
+    assert.equal(res._body.ok, true);
+    assert.equal(res._body.item.text, "改写后");
+    assert.equal(res._body.item.itemId, "q-1");
+  });
+
+  test("handleQueueDelete 缺 itemId → 400", async () => {
+    const cs = getClient("test-qd-1");
+    cs.mcodeSessionId = "mvs-qd-1";
+    const req = fakeReq({}); // 无 itemId
+    const res = fakeRes();
+    await handleQueueDelete(req, res, { cid: "test-qd-1", cs });
+    assert.equal(res._status, 400);
+    assert.match(res._body.error, /itemId required/);
+  });
+
+  test("handleQueueDelete 调 acp.queueDelete + 返回 200", async () => {
+    const cs = getClient("test-qd-2");
+    cs.mcodeSessionId = "mvs-qd-2";
+    const req = fakeReq({ itemId: "q-1" });
+    const res = fakeRes();
+    await handleQueueDelete(req, res, { cid: "test-qd-2", cs });
+    assert.equal(res._status, 200);
+    assert.equal(res._body.ok, true);
   });
 });
 

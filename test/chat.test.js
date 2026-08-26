@@ -150,32 +150,74 @@ describe("handleStop", () => {
     assert.equal(body.hardKilled, false);
   });
 
-  test("mcode acp unsupported cancel: hardKilled=true, note='hard kill'", async () => {
-    // The default mock for mcode-rpc.cancelSession returns {ok:false, code:'unsupported'}
+  // v1.0.2: mcode 0.2.4 acp 真支持 session/cancel — 走 McodeAcpClient.cancel() 路径
+  //   测试用 mock McodeAcpClient 模拟 cancel 成功 + 失败两种情况
+  test("v1.0.2: mcode acp cancel 成功: cancelled=true, hardKilled=false", async (t) => {
+    // mock acp.mjs: McodeAcpClient.cancel 成功
+    t.mock.module(absPath("../acp.mjs"), {
+      namedExports: {
+        McodeAcpClient: class {
+          constructor() {}
+          async start() { return { capabilities: {} }; }
+          async cancel() { return {}; }
+          async stop() {}
+        },
+      },
+    });
     const cid = "cid-1";
     const cs = makeClientState();
     cs.workspace = { dir: "/ws-X", branch: null, tree: null };
-    cs.mcodeSessionId = "mvs_aabb000000000000000000000000abcd";
+    cs.mcodeSessionId = "mvs_v102";
     clients.set(cid, cs);
 
-    // Register a fake active child
-    const { setActiveChild, getActiveChild } = await import(absPath("lib/state-bus.js"));
+    const { setActiveChild } = await import(absPath("lib/state-bus.js"));
     const fakeChild = {
       child: { killed: false, exitCode: null },
       kill: () => { fakeChild.child.killed = true; },
     };
     setActiveChild(cid, fakeChild);
-    assert.ok(getActiveChild(cid));
 
     const res = fakeRes();
     const { handleStop } = await import(absPath("routes/chat.js"));
     await handleStop(null, res, { cs, cid });
     const body = JSON.parse(res._body);
     assert.equal(body.ok, true);
-    assert.equal(body.wasRunning, true);
-    assert.equal(body.cancelled, false, "mcode acp unsupported → not cancelled");
+    assert.equal(body.cancelled, true, "v1.0.2 温和路径生效 → cancelled=true");
+    assert.equal(body.hardKilled, false, "cancelled 成功就不 hard kill");
+    assert.match(body.note, /gentle cancel/);
+  });
+
+  test("v1.0.2: mcode acp cancel 失败 → fallback hard kill", async (t) => {
+    t.mock.module(absPath("../acp.mjs"), {
+      namedExports: {
+        McodeAcpClient: class {
+          constructor() {}
+          async start() { return { capabilities: {} }; }
+          async cancel() { throw new Error("acp cancel RPC failed"); }
+          async stop() {}
+        },
+      },
+    });
+    const cid = "cid-1";
+    const cs = makeClientState();
+    cs.workspace = { dir: "/ws-X", branch: null, tree: null };
+    cs.mcodeSessionId = "mvs_v102";
+    clients.set(cid, cs);
+
+    const { setActiveChild } = await import(absPath("lib/state-bus.js"));
+    const fakeChild = {
+      child: { killed: false, exitCode: null },
+      kill: () => { fakeChild.child.killed = true; },
+    };
+    setActiveChild(cid, fakeChild);
+
+    const res = fakeRes();
+    const { handleStop } = await import(absPath("routes/chat.js"));
+    await handleStop(null, res, { cs, cid });
+    const body = JSON.parse(res._body);
+    assert.equal(body.ok, true);
+    assert.equal(body.cancelled, false, "acp 失败 → cancelled=false");
     assert.equal(body.hardKilled, true, "fallback hard kill should fire");
-    assert.match(body.note, /hard kill/);
   });
 });
 

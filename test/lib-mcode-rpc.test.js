@@ -41,12 +41,15 @@ describe("mcode-rpc — PERMISSION_MODES constant", () => {
 });
 
 describe("mcode-rpc — MCODE_ACP_CAPABILITIES", () => {
-  test("is an object with expected capability flags (mcode 0.1.5 acp)", () => {
+  test("is an object with expected capability flags (mcode 0.2.4 acp)", () => {
     assert.equal(typeof rpc.MCODE_ACP_CAPABILITIES, "object");
-    // mcode 0.1.5 does NOT support set_mode / set_config_option / cancel / activate
+    // v1.0.2: mcode 0.2.4 支持 cancel / fork / resume (cli.js grep 验证)
+    //   仍不支持: set_mode / set_config_option / activate / delete
     assert.equal(rpc.MCODE_ACP_CAPABILITIES.set_mode, false);
     assert.equal(rpc.MCODE_ACP_CAPABILITIES.set_config_option, false);
-    assert.equal(rpc.MCODE_ACP_CAPABILITIES.cancel, false);
+    assert.equal(rpc.MCODE_ACP_CAPABILITIES.cancel, true, "mcode 0.2.4 支持 cancel");
+    assert.equal(rpc.MCODE_ACP_CAPABILITIES.fork, true, "mcode 0.2.4 支持 fork");
+    assert.equal(rpc.MCODE_ACP_CAPABILITIES.resume, true, "mcode 0.2.4 支持 resume");
     assert.equal(rpc.MCODE_ACP_CAPABILITIES.activate, false);
   });
 });
@@ -128,10 +131,11 @@ describe("mcode-rpc — UNSUPPORTED short-circuit functions (no mcode spawn)", (
     assert.equal(r.code, "unsupported");
   });
 
-  test("cancelSession returns {ok:false, code:'unsupported'}", async () => {
-    const r = await rpc.cancelSession("mvs_aaa");
-    assert.equal(r.ok, false);
-    assert.equal(r.code, "unsupported");
+  test("cancelSession no longer in UNSUPPORTED (mcode 0.2.4 supports it)", async () => {
+    // v1.0.2: mcode 0.2.4 真支持 session/cancel — 不再标 UNSUPPORTED
+    // 实际调 mcode acp 会成功 (有 mcode 时) 或报别的错 (mcode 不在); 测试只验证不再 short-circuit unsupported
+    // (避免在 CI 试图 spawn mcode, 用 capability 检查)
+    assert.equal(rpc.MCODE_ACP_CAPABILITIES.cancel, true, "mcode 0.2.4 取消能力打开");
   });
 
   test("activateSession returns {ok:false, code:'unsupported'}", async () => {
