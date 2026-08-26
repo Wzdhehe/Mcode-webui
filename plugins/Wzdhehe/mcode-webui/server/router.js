@@ -193,6 +193,28 @@ const ROUTES = [
     handler: sessionsRoute.handleResume,
   },
 
+  // v1.0.2 Round 6: mcode 0.2.4 Goal 4 个 endpoint
+  {
+    method: "POST",
+    match: (p) => p === "/api/chat/goal",
+    handler: chatRoute.handleGoalCreate,
+  },
+  {
+    method: "PATCH",
+    match: (p) => p === "/api/chat/goal",
+    handler: chatRoute.handleGoalPatch,
+  },
+  {
+    method: "DELETE",
+    match: (p) => p === "/api/chat/goal",
+    handler: chatRoute.handleGoalClear,
+  },
+  {
+    method: "GET",
+    match: (p) => p === "/api/chat/goal",
+    handler: chatRoute.handleGoalGet,
+  },
+
   // Usage
   {
     method: "POST",

@@ -99,6 +99,16 @@ export const clients = new Map(); // cid -> clientState
 export const sseByCid = new Map(); // cid -> SSE response
 export const activeChildByCid = new Map(); // cid -> child process
 
+// v1.0.2 Round 6: Goal 5 状态 enum (cli.js bundle grep 验证)
+//   跟 mcode runtime 内部 enum 一致; 客户端用这个 set 做输入校验 + UI 映射
+export const GOAL_STATUSES = new Set([
+  "active",          // 进行中
+  "paused",          // 暂停
+  "blocked",         // 阻塞 (依赖外部输入)
+  "complete",        // 完成
+  "budget_limited",  // 预算用尽
+])
+
 export function getClient(cid) {
   if (!cid) cid = "default";
   if (!clients.has(cid)) clients.set(cid, makeClientState());

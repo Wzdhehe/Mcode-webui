@@ -1,0 +1,26 @@
+[webui] workspace: tui cwd.json=C:\Users\mjc39\.minimax-code\webui
+[webui] mcode 0.2.4 detected (>= 0.2.4 ✓)
+[webui] listening on http://0.0.0.0:8080
+[webui] LAN url: http://192.168.31.95:8080
+[webui] mcode cmd: C:\Users\mjc39\.minimax-code\mcode.cmd
+[webui] default model: minimax_api/MiniMax-M3
+[webui] default workspace: C:\Users\mjc39\.minimax-code\webui
+[webui] uploads: C:\Users\mjc39\.minimax-code\.webui-uploads
+[webui] sessions: C:\Users\mjc39\.minimax-code\.webui-sessions.json
+[webui] settings: C:\Users\mjc39\.mcode-webui\settings.json
+[webui] cachedMcodeCommands refreshed: 10 mcode commands
+[webui] commands probe session cleaned: mvs_08d8b271… ok=true
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
+[acp] singleton client started pid=?
