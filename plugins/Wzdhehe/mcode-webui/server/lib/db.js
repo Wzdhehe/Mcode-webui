@@ -2,10 +2,12 @@
 // SQLite helpers — lazy require mcode's better-sqlite3 (so we don't break if missing).
 
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { MCODE_CMD } from "./config.js";
 
 const _webuiRequire = createRequire(import.meta.url);
 
@@ -13,31 +15,99 @@ const _webuiRequire = createRequire(import.meta.url);
 //   mcode 0.1.4 acp `session/delete` 返回 "Method not found" (协议层注册但没实现)
 //   真删 mcode session 只能 SQL 删 local_runtime_sessions 等关联表
 //   lazy init — 只在第一次调用时 require
+// v1.0.1 round 4: try multiple candidate paths so we work in non-canonical
+//   install layouts (registry install, npm-global mcode, etc.). The hard-coded
+//   `__dirname/../../../node_modules/...` path only works in the dev layout
+//   where webui lives at `<mcode-root>/webui/`.
 let _McodeBetterSqlite3 = null;
 let _McodeBetterSqlite3Failed = false;
+
+// Resolution priority for better-sqlite3:
+//   1. $MCODE_BETTER_SQLITE3 (explicit env override — user-controllable)
+//   2. <MCODE_CMD>/../../node_modules/@minimax-ai/code/node_modules/better-sqlite3
+//      (mcode binary → its bundled deps — works in any install layout)
+//   3. <__dirname>/../../../node_modules/@minimax-ai/code/node_modules/better-sqlite3
+//      (dev layout fallback — webui source tree under canonical .minimax-code/webui/)
+//
+// Exported (underscore prefix = test-only) so install-layout tests can
+// assert the candidate list without actually loading better-sqlite3.
+// `mcodeCmd` and `home` are parameterized so tests can simulate any
+// install layout without having to mutate module-level constants.
+export function _getBetterSqlite3Candidates({ mcodeCmd = MCODE_CMD, home = homedir() } = {}) {
+  const candidates = [];
+  if (process.env.MCODE_BETTER_SQLITE3) {
+    candidates.push(process.env.MCODE_BETTER_SQLITE3);
+  }
+  if (mcodeCmd && mcodeCmd !== "mcode") {
+    // mcodeCmd is the mcode executable file path (e.g.
+    // ~/.minimax-code/bin/mcode on macOS, or ~/.minimax-code/mcode.cmd
+    // on Windows, or /usr/local/bin/mcode for npm-global). The mcode
+    // package's node_modules/ lives in a sibling of the binary's dir,
+    // depending on the install layout:
+    //
+    //   • npm-style install (macOS default): binary at <root>/bin/mcode,
+    //     package at <root>/lib/, deps at <root>/lib/node_modules/...
+    //     → up 1 from the binary's dir, then down to "lib/node_modules/".
+    //   • flat install (some Linux): binary at <root>/mcode, package at
+    //     <root>/, deps at <root>/node_modules/...
+    //     → same dir as the binary.
+    //
+    // Round 4 used `MCODE_CMD/../../` which treated the executable
+    // file as a directory and went 3 levels above the install root.
+    // Round 5 picked one of the two layouts; round 6 emits BOTH so the
+    // candidate list works for either install style.
+    candidates.push(
+      join(
+        dirname(mcodeCmd), "..", "lib",
+        "node_modules", "@minimax-ai", "code", "node_modules",
+        "better-sqlite3",
+      ),
+    );
+    candidates.push(
+      join(
+        dirname(mcodeCmd),
+        "node_modules", "@minimax-ai", "code", "node_modules",
+        "better-sqlite3",
+      ),
+    );
+  }
+  // Standard install location: <home>/.minimax-code/lib/node_modules/...
+  // Emitted unconditionally so we work even when MCODE_CMD is the
+  // PATH-placeholder "mcode" (config.js can't find a mcode.cmd on
+  // macOS where the binary is just "mcode").
+  candidates.push(
+    join(
+      home, ".minimax-code", "lib",
+      "node_modules", "@minimax-ai", "code", "node_modules",
+      "better-sqlite3",
+    ),
+  );
+  // Dev layout fallback — webui source tree at <mcode-root>/webui/server/lib/
+  candidates.push(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..", "..", "..",
+      "node_modules", "@minimax-ai", "code", "node_modules",
+      "better-sqlite3",
+    ),
+  );
+  return candidates;
+}
 
 export function getMcodeBetterSqlite3({ MCODE_RUNTIME_DB: _ignored } = {}) {
   if (_McodeBetterSqlite3) return _McodeBetterSqlite3;
   if (_McodeBetterSqlite3Failed) return null;
-  try {
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const __cfg = join(__dirname, "..", "..", ".."); // webui/server/lib → ../.. → .minimax-code
-    _McodeBetterSqlite3 = _webuiRequire(
-      join(
-        __cfg,
-        "node_modules",
-        "@minimax-ai",
-        "code",
-        "node_modules",
-        "better-sqlite3",
-      ),
-    );
-    return _McodeBetterSqlite3;
-  } catch (e) {
-    console.warn("[webui] cannot load better-sqlite3 from mcode:", e.message);
-    _McodeBetterSqlite3Failed = true;
-    return null;
+  for (const c of _getBetterSqlite3Candidates()) {
+    try {
+      _McodeBetterSqlite3 = _webuiRequire(c);
+      return _McodeBetterSqlite3;
+    } catch {
+      // try next candidate
+    }
   }
+  console.warn("[webui] cannot load better-sqlite3 from any known location");
+  _McodeBetterSqlite3Failed = true;
+  return null;
 }
 
 // 删 mcode session 涉及的所有关联表 (含 FTS5 external content + 各种 state 表)
@@ -92,10 +162,15 @@ export function deleteMcodeSessionFromDb(
 ) {
   if (!/^mvs_[a-f0-9]{32}$/.test(sid))
     return { ok: false, reason: "not_mcode_sid" };
-  const Db = getMcodeBetterSqlite3();
-  if (!Db) return { ok: false, reason: "better_sqlite3_not_loaded" };
+  // Check db path BEFORE loading better-sqlite3 so callers get the most
+  // specific failure first. Round 4 had these reversed: callers passing
+  // a missing MCODE_RUNTIME_DB got `better_sqlite3_not_loaded` even when
+  // the db path was the actual problem. lib-db.test.js already
+  // documents the expected order: `mcode_db_not_found` must win.
   if (!MCODE_RUNTIME_DB || !existsSync(MCODE_RUNTIME_DB))
     return { ok: false, reason: "mcode_db_not_found" };
+  const Db = getMcodeBetterSqlite3();
+  if (!Db) return { ok: false, reason: "better_sqlite3_not_loaded" };
 
   // dry-run path: open readonly, count rows per table, do NOT modify.
   // Satisfies mcode-plugin-guide red-lines.md §"写操作/破坏性操作":

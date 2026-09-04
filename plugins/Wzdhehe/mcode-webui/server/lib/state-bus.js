@@ -9,7 +9,24 @@ import {
   getMcodeSessionsCacheSync,
   getMcodeSessionsStaleSync,
 } from "./acp-client.js";
-import { getLanBroadcast } from "./settings.js";
+import {
+  // v1.0.1 round 8: getCurrentToken removed from the imports —
+  //   the SSE state push no longer references the token (closing
+  //   the cross-origin bootstrap-token leak). If you need to read
+  //   the current token server-side, import it directly from the
+  //   file that uses it (the only consumer is settings.js itself
+  //   + auth.js via setExpectedToken).
+  getLanBroadcast,
+  getQuotaEnabled,
+  getReadOnly,
+  getTokenAcknowledged,
+  getTokenEnabled,
+  getTokenPlanApiKey,
+  getTokenPlanApiKeyFilePath,
+  getTokenPlanApiKeySource,
+  getTokenRotatedAt,
+  maskTokenPlanKey,
+} from "./settings.js";
 
 // v0.5.ai: A2 per-client 架构
 // 每个 webui tab 一个 client (cid = localStorage webui_cid)
@@ -133,6 +150,39 @@ function ensureMcodeSessionsFetchedAndPush(workspace) {
         availableCommands: getCachedMcodeCommands(),
         onlineCount: sseByCid.size,
         lanBroadcast: getLanBroadcast(),
+        readOnly: getReadOnly(),
+        tokenEnabled: getTokenEnabled(),
+        // v1.0.1 round 8: `currentToken` removed from SSE state push
+        // entirely. The server no longer echoes the token in any
+        // channel — the only way an operator gets the value is from
+        // server stdout (first start / rotation) or by reading
+        // ~/.mcode-webui/settings.json. The SPA picks up the token
+        // from the URL `?token=…` on first load and stores it in
+        // localStorage; subsequent requests use that value as the
+        // Authorization: Bearer header. The `tokenAcknowledged` flag
+        // is kept for back-compat with the SPA's existing
+        // state-shape references.
+        currentToken: "",
+        tokenAcknowledged: getTokenAcknowledged(),
+        tokenRotatedAt: getTokenRotatedAt(),
+        // v2026-08-28 modacker: Token Plan (套餐用量) feature fields.
+        //   Previously these were only synced via the one-shot
+        //   /api/settings fetch in loadLanInfo(); the SSE replace-state
+        //   pattern (state = JSON.parse(ev.data)) then clobbered them
+        //   on the next push, so toggling the switch appeared to do
+        //   nothing — the usage button stayed hidden. Including them
+        //   in the snapshot makes the client single-source-of-truth
+        //   for everything it shows. The masked key never includes
+        //   the full Subscription Key, only "sk-cp-...XXXX".
+        quotaEnabled: getQuotaEnabled(),
+        hasTokenPlanKey: getTokenPlanApiKey().length > 0,
+        tokenPlanApiKeyMasked: maskTokenPlanKey(),
+        // v2026-08-28 modacker (A+C): external key source surface.
+        //   Webui uses this to hide the "delete" button when the
+        //   key is managed by env / file (the operator would have
+        //   to remove it there, not in the UI).
+        tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+        tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
       };
       try {
         res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
@@ -173,6 +223,30 @@ export function pushStateFor(cid, opts = {}) {
         availableCommands: cachedCmds,
         onlineCount: sseByCid.size,
         lanBroadcast,
+        readOnly: getReadOnly(),
+        tokenEnabled: getTokenEnabled(),
+        // v1.0.1 round 8: currentToken removed from SSE state push.
+        // See the snapshot in ensureMcodeSessionsFetchedAndPush above
+        // for the rationale (closes the cross-origin bootstrap-token
+        // leak — hetaoBackend report 2026-09-01).
+        currentToken: "",
+        tokenAcknowledged: getTokenAcknowledged(),
+        tokenRotatedAt: getTokenRotatedAt(),
+        // v2026-08-28 modacker: Token Plan (套餐用量) feature fields —
+        //   see note on the per-cid-branch snapshot below. Same fields,
+        //   same rationale. This is the broadcast path that fires
+        //   after /api/settings mutations (and on the second client
+        //   connect in the test we just ran), so any push without
+        //   these clobbers state.quotaEnabled and re-hides the button.
+        quotaEnabled: getQuotaEnabled(),
+        hasTokenPlanKey: getTokenPlanApiKey().length > 0,
+        tokenPlanApiKeyMasked: maskTokenPlanKey(),
+        // v2026-08-28 modacker (A+C): external key source surface.
+        //   Webui uses this to hide the "delete" button when the
+        //   key is managed by env / file (the operator would have
+        //   to remove it there, not in the UI).
+        tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+        tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
       };
       try {
         res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
@@ -195,6 +269,26 @@ export function pushStateFor(cid, opts = {}) {
     availableCommands: cachedCmds,
     onlineCount: sseByCid.size,
     lanBroadcast,
+    readOnly: getReadOnly(),
+    tokenEnabled: getTokenEnabled(),
+    // v1.0.1 round 8: currentToken removed from SSE state push.
+    // See the snapshot in ensureMcodeSessionsFetchedAndPush above
+    // for the rationale.
+    currentToken: "",
+    tokenAcknowledged: getTokenAcknowledged(),
+    tokenRotatedAt: getTokenRotatedAt(),
+    // v2026-08-28 modacker: Token Plan (套餐用量) feature fields —
+    //   see note on the broadcast-branch snapshot above. Same fields,
+    //   same rationale. Without these the per-cid SSE push also
+    //   clobbers the local `state.quotaEnabled` and the usage button
+    //   hides itself right after the user toggles it on.
+    quotaEnabled: getQuotaEnabled(),
+    hasTokenPlanKey: getTokenPlanApiKey().length > 0,
+    tokenPlanApiKeyMasked: maskTokenPlanKey(),
+    // v2026-08-28 modacker (A+C): external key source surface — see
+    //   the broadcast-branch snapshot above for rationale.
+    tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+    tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
   };
   const payload = JSON.stringify(snapshot);
   const res = sseByCid.get(cid);
@@ -236,6 +330,25 @@ export function pushOnlineCount(lanBroadcast) {
       availableCommands: cachedCmds,
       onlineCount: sseByCid.size,
       lanBroadcast,
+      readOnly: getReadOnly(),
+      tokenEnabled: getTokenEnabled(),
+      // v1.0.1 round 8: currentToken removed from SSE state push.
+      // See the snapshot in ensureMcodeSessionsFetchedAndPush above
+      // for the rationale.
+      currentToken: "",
+      tokenAcknowledged: getTokenAcknowledged(),
+      tokenRotatedAt: getTokenRotatedAt(),
+      // v2026-08-28 modacker: Token Plan (套餐用量) feature fields —
+      //   see pushStateFor above. pushOnlineCount fires on every SSE
+      //   client connect/disconnect, so without these the next push
+      //   after a tab opens would also clobber quotaEnabled.
+      quotaEnabled: getQuotaEnabled(),
+      hasTokenPlanKey: getTokenPlanApiKey().length > 0,
+      tokenPlanApiKeyMasked: maskTokenPlanKey(),
+      // v2026-08-28 modacker (A+C): external key source surface — see
+      //   the broadcast-branch snapshot above for rationale.
+      tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+      tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
     };
     try {
       res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
@@ -282,4 +395,44 @@ export function setSseClient(cid, res) {
 export function endSseClient(cid, res) {
   // Only clear the map entry if it still points at the same res (avoid races)
   if (sseByCid.get(cid) === res) sseByCid.delete(cid);
+}
+
+// v1.0.1: broadcastTokenRotated — push a named SSE event so all
+// already-authenticated clients can react to a token rotation.
+//
+// v1.0.1 round 8 (CSRF / bootstrap-token-disclosure fix): the event
+// payload NO LONGER carries the new token. Pre-fix the data field
+// was the raw new token string, and clients used it to auto-update
+// their HEADERS / localStorage without re-prompting the operator.
+// Post-fix the payload is a JSON object {rotated: true, at: <ms>}
+// — just a signal. Connected clients use this as the cue to:
+//   (a) clear their localStorage.mcode_webui_token (so the next
+//       request uses an empty Authorization header and gets 401),
+//   (b) show a "Token rotated — please re-open this URL with the
+//       new value (from server stdout or ~/.mcode-webui/settings.json)"
+//       toast.
+//
+// The new token is delivered out-of-band: server stdout on rotation
+// (existing behavior) + writeAtomic to settings.json. The operator
+// copies the new value and re-opens the webui URL with `?token=…`.
+//
+// This trades a small UX convenience (auto-update of HEADERS) for
+// closing the cross-origin bootstrap-token leak — see SECURITY-NOTES
+// §10 Cross-origin request handling (round 8).
+export function broadcastTokenRotated(_token) {
+  // _token is intentionally unused — kept in the signature so callers
+  // (routes/settings.js) don't need to change. The payload below never
+  // includes it. If you're debugging, the new value is also printed
+  // to server stdout by settings.js#printToken on the rotation path.
+  const payload = JSON.stringify({ rotated: true, at: Date.now() });
+  // SSE custom event format:
+  //   event: <name>\n
+  //   data: <payload>\n
+  //   \n
+  const frame = `event: auth.token_rotated\ndata: ${payload}\n\n`;
+  for (const [, res] of sseByCid) {
+    try {
+      res.write(frame);
+    } catch {}
+  }
 }

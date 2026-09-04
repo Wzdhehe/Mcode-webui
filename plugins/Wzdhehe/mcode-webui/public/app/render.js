@@ -7,6 +7,27 @@ import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTim
 import { setLeftOpen, setRightOpen, API_SUFFIX, sidebarReady, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, connect, es, getGeneralQuota, leftOpen, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
 import { SLASH_COMMANDS, SLASH_SKILLS, attachEvents, attachModalEvents, attachedFiles, attachmentList, autoResize, checkModals, fileInput, filterSlash, hideMode, hidePerm, hidePlan, hidePlanMode, hideSettings, hideSlash, isSending, lastShownPermKey, lastShownPlanKey, lastShownPlanModeKey, modeOpen, modePopover, moveSlash, permOpen, planModeOpen, planOpen, planSending, removeAttachment, renderAttachments, renderPerm, renderPlan, selectSlash, send, sendPermAnswer, sendPlanAnswer, sendPlanModeAnswer, setMode, settingsMenu, showPerm, showPlan, showPlanMode, showSlash, slashActiveIdx, slashFiltered, slashInput, slashOpen, slashOverlay, slashQuery, slashResults, stopExec, toggleLang, toggleMode, toggleSettings, uploadFiles } from './events.js'
 
+// v1.0.1 round 8: when the server rotates the token (POST /api/settings
+// {resetToken: true}) it broadcasts an SSE event `auth.token_rotated`.
+// state.js#connect handles the event and dispatches a `webui:token_rotated`
+// CustomEvent on window. We listen here and tell the user (toast) that
+// the new token is available out-of-band (server stdout or
+// ~/.mcode-webui/settings.json) and they need to re-open the URL with
+// `?token=<new-value>`. We do NOT auto-update HEADERS — round 8 made
+// the new value impossible to obtain via HTTP/SSE, so the user must
+// perform the re-open step.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('webui:token_rotated', () => {
+    try {
+      const msg = (typeof t === 'function' && t('token_rotated_toast'))
+        || 'Token 已轮换 — 请从 server stdout 或 ~/.mcode-webui/settings.json 读取新 token，然后重新打开 URL（含 ?token=...）'
+      // showToast is a long-lived utility; default 2200ms is too short
+      // for an actionable message, bump to 8s.
+      showToast(msg, 8000)
+    } catch (e) { console.error('[webui] token rotated toast failed', e) }
+  })
+}
+
 // v0.5.ax: 欢迎页时隐藏右侧栏（chat-area 居中铺满）
 export function hideRightForWelcome(isWelcome) {
   const rp = document.getElementById('right-panel')
@@ -48,6 +69,16 @@ export function render() {
     console.warn('[lan] render: chip-lan-link element NOT found in DOM')
   }
 
+  // v1.0.1: 同步 sub-card 内容 (即使卡片是 hidden 状态, 也更新 input value
+  // 这样打开时是新鲜的)
+  renderLanCardContent({
+    lanBroadcast,
+    readOnly: state.readOnly === true,
+    tokenEnabled: state.tokenEnabled !== false,
+    tokenAcknowledged: state.tokenAcknowledged === true,
+    currentToken: state.currentToken || '',
+  })
+
   // v0.5.aa: TPS 还在用
   const tpsEl = document.getElementById('chip-tps')
 
@@ -63,6 +94,13 @@ export function render() {
   if (chipOnline) {
     chipOnline.querySelector('span:first-child').textContent = onlineDot
     chipOnline.querySelector('#chip-online-text').textContent = onlineText
+  }
+
+  // v1.0.1: 只读模式 top-bar chip — 醒目的红色双语 chip, server readOnly=true
+  // 时所有 client (包括本机) 都看得到, 远程 client 一眼就知道现在不能 send / delete
+  const chipReadonly = document.getElementById('chip-readonly')
+  if (chipReadonly) {
+    chipReadonly.hidden = !(state && state.readOnly === true)
   }
 
   // v0.5.aa: chat 底部思考中指示器 + send 按钮 → stop 按钮
@@ -331,6 +369,102 @@ export function renderTodo() {
 export let collapsedWorkspaces = (() => {
   try { return new Set(JSON.parse(localStorage.getItem('webui_ws_collapsed_v1') || '[]')) } catch { return new Set() }
 })()
+
+// v1.0.1: 渲染 LAN sub-card (#lan-card) 的内容. 接收 settings 对象
+// (从 SSE push 或 fetch /api/settings) 并更新各 input / token value /
+// 接口 checklist. 即使卡片 hidden 也调用 — 这样打开时已经是最新值.
+//
+// 注意: token 渲染走 textContent 不用 innerHTML 防 XSS (SECURITY-NOTES.md §2).
+export function renderLanCardContent(s) {
+  if (!s) return
+  const lanCard = document.getElementById('lan-card')
+  if (!lanCard) return  // DOM 还没准备好 (在 app 启动前调用)
+  const lanCardBroadcast = document.getElementById('lan-card-broadcast')
+  const lanCardReadonly = document.getElementById('lan-card-readonly')
+  const lanCardTokenAuth = document.getElementById('lan-card-token-auth')
+  const lanCardTokenMask = document.getElementById('lan-card-token-mask')
+  const lanCardTokenValue = document.getElementById('lan-card-token-value')
+  const lanCardTokenWarning = document.getElementById('lan-card-token-warning')
+  const lanCardTokenAck = document.getElementById('lan-card-token-ack')
+
+  if (lanCardBroadcast) lanCardBroadcast.checked = s.lanBroadcast !== false
+  if (lanCardReadonly) lanCardReadonly.checked = s.readOnly === true
+  if (lanCardTokenAuth) lanCardTokenAuth.checked = s.tokenEnabled !== false
+
+  // Token area: three states
+  //  (a) token available (currentToken non-empty, !acknowledged) — value
+  //      visible (or mask visible, depending on toggle), show/copy buttons
+  //  (b) token not available (currentToken empty, e.g. after acknowledge)
+  //      — show a "saved" placeholder, hide the show/copy buttons
+  //  (c) token enabled is off — show "(disabled)" placeholder
+  const lanCardTokenToggle = document.getElementById('lan-card-token-toggle')
+  const lanCardTokenCopy = document.getElementById('lan-card-token-copy')
+  const lanCardTokenRow = document.getElementById('lan-card-token-row')
+  const tokenEnabled = s.tokenEnabled !== false
+  const hasToken = typeof s.currentToken === 'string' && s.currentToken.length > 0
+
+  if (lanCardTokenValue) lanCardTokenValue.textContent = s.currentToken || ''
+
+  if (!tokenEnabled) {
+    // (c) Token auth disabled — don't show token or toggle
+    if (lanCardTokenRow) {
+      lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">— ${escapeHtml(t('lan_card_token_disabled') || 'Token 鉴权已关闭')}</span>`
+    }
+  } else if (!hasToken) {
+    // (b) Token not in /api/settings response — v1.0.1 round 8:
+    //   the server NO LONGER returns the token in HTTP responses
+    //   (closes the cross-origin bootstrap-token leak — see
+    //   SECURITY-NOTES §10). The user reads the token from
+    //   server stdout or ~/.mcode-webui/settings.json; the SPA only
+    //   needs to know that the token is "configured server-side" and
+    //   not display it. The placeholder text now points the user to
+    //   the two out-of-band delivery channels.
+    if (lanCardTokenRow) {
+      lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">✓ ${escapeHtml(t('lan_card_token_saved_v2') || '已保存 (stdout / ~/.mcode-webui/settings.json)')}</span>`
+    }
+  } else {
+    // (a) Token available — make sure mask+value+buttons are rendered
+    // If the row was rewritten above (case b/c), restore the original DOM
+    if (lanCardTokenRow && !lanCardTokenRow.querySelector('#lan-card-token-mask')) {
+      lanCardTokenRow.innerHTML =
+        `<span class="lan-card-token-mask" id="lan-card-token-mask">••••••••••••••••••••••••••••••••</span>` +
+        `<span class="lan-card-token-value" id="lan-card-token-value" hidden></span>` +
+        `<button class="lan-card-btn" id="lan-card-token-toggle" data-i18n="lan_card_token_show">${escapeHtml(t('lan_card_token_show'))}</button>` +
+        `<button class="lan-card-btn" id="lan-card-token-copy" data-i18n="lan_card_token_copy">${escapeHtml(t('lan_card_token_copy'))}</button>`
+      // Click handlers are event-delegated on the row (see events.js),
+      // so the new buttons pick them up automatically — no re-bind needed.
+    }
+  }
+
+  // acknowledged 提示
+  if (lanCardTokenWarning) lanCardTokenWarning.hidden = s.tokenAcknowledged !== false
+  if (lanCardTokenAck) lanCardTokenAck.hidden = s.tokenAcknowledged !== false
+}
+
+// v2026-08-28 modacker: render the Token Plan (套餐用量) card.
+// Reflects server's `quotaEnabled` and the masked key preview. The
+// real key never leaves the server; this function only shows the
+// masked tail + a "set" / "not set" status line.
+export function renderQuotaCardContent(s) {
+  if (!s) return
+  const enabled = document.getElementById('quota-card-enabled')
+  const input = document.getElementById('quota-card-key-input')
+  const status = document.getElementById('quota-card-status')
+  if (enabled) enabled.checked = s.quotaEnabled === true
+  // Always clear the password input on render (don't keep typed-but-unsaved
+  // values around). Show a status line that indicates current server state.
+  if (input) input.value = ''
+  if (status) {
+    if (s.hasTokenPlanKey) {
+      const masked = s.tokenPlanApiKeyMasked || 'sk-cp-...'
+      status.textContent = `已保存 (${masked})`
+    } else if (s.quotaEnabled) {
+      status.textContent = '请填 Subscription Key'
+    } else {
+      status.textContent = '未启用'
+    }
+  }
+}
 
 // v0.5.bx-31: sidebar 首次 SSE 推 mcodeSessions 之前显示 skeleton, 避免点删除/切时 race
 //   mcode acp singleton 启动要 1-3s, 期间 state.mcodeSessions=[] → render 显示空

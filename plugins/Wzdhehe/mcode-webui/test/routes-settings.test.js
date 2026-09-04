@@ -139,3 +139,154 @@ describe("handlePostSettings — /api/settings POST", () => {
     assert.equal(typeof body.mcodeVersion, "string");
   });
 });
+
+// =====================================================================
+// v1.0.1 — new fields
+// =====================================================================
+
+describe("handlePostSettings — v1.0.1 new fields", () => {
+  beforeEach(() => {
+    settingsLib.setLanBroadcast(true);
+    settingsLib.setReadOnly(false);
+    settingsLib.setTokenEnabled(true);
+    settingsLib.setTokenAcknowledged(false);
+  });
+
+  test("readOnly:true sets changed:true + persists", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ readOnly: true }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, true);
+    assert.equal(body.readOnly, true);
+    assert.equal(settingsLib.getReadOnly(), true);
+  });
+
+  test("readOnly:false after true sets changed:true", async () => {
+    settingsLib.setReadOnly(true);
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ readOnly: false }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, true);
+    assert.equal(body.readOnly, false);
+    assert.equal(settingsLib.getReadOnly(), false);
+  });
+
+  test("readOnly same value: changed:false", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ readOnly: false }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, false);
+  });
+
+  test("tokenEnabled:false sets changed:true", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ tokenEnabled: false }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, true);
+    assert.equal(body.tokenEnabled, false);
+    assert.equal(settingsLib.getTokenEnabled(), false);
+  });
+
+  test("acknowledgeToken:true sets changed:true + persists", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ acknowledgeToken: true }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, true);
+    assert.equal(body.tokenAcknowledged, true);
+    assert.equal(settingsLib.getTokenAcknowledged(), true);
+  });
+
+  test("acknowledgeToken same value: changed:false", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ acknowledgeToken: false }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, false);
+  });
+
+  test("unknown fields are ignored (no error)", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(
+      fakeReq({ unknownField: "haha", anotherOne: 123 }),
+      res,
+      {},
+    );
+    const body = JSON.parse(res._body);
+    assert.equal(body.ok, true);
+    assert.equal(body.changed, false);
+  });
+
+  test("multiple field changes batch into one response", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(
+      fakeReq({ readOnly: true, tokenEnabled: false }),
+      res,
+      {},
+    );
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, true);
+    assert.equal(body.readOnly, true);
+    assert.equal(body.tokenEnabled, false);
+  });
+
+  test("malformed JSON body is treated as empty payload (no crash)", async () => {
+    // Use a fakeReq with non-JSON bytes
+    const { Readable } = await import("node:stream");
+    const req = Readable.from([Buffer.from("this is not json", "utf8")]);
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(req, res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.ok, true);
+    assert.equal(body.changed, false);
+  });
+});
+
+describe("handlePostSettings — resetToken", () => {
+  beforeEach(() => {
+    settingsLib.setTokenAcknowledged(false);
+  });
+
+  test("resetToken:true triggers rotation (in-memory + persisted); response NO LONGER returns the new token (round 8)", async () => {
+    // v1.0.1 round 8: the response no longer carries the new token —
+    // it would be readable cross-origin (CSRF) and via the SSE
+    // state-push. The new value is delivered out-of-band (server
+    // stdout + settings.json). This test pins the new contract:
+    //   - rotation happens (in-memory + on-disk)
+    //   - the response acknowledges rotation but does NOT include
+    //     `currentToken` (or, if it does, the value is the empty
+    //     string — back-compat with the SPA's field shape)
+    //   - a `hint` field points the operator to stdout / settings.json
+    const initial = settingsLib.rotateToken();
+    settingsLib.setTokenAcknowledged(true);
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ resetToken: true }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.ok, true);
+    assert.equal(body.tokenRotated, true);
+    assert.equal(body.tokenAcknowledged, undefined,
+      "response should no longer set tokenAcknowledged=false on the rotation path (field shape simplified in round 8)");
+    // round 8 contract: the new token is NOT in the response.
+    // Accept either an absent field or an empty string.
+    assert.ok(
+      body.currentToken === undefined || body.currentToken === "",
+      `currentToken must not be in the rotation response (got ${JSON.stringify(body.currentToken)})`
+    );
+    // The in-memory state DID rotate, even though the response hides it.
+    assert.notEqual(settingsLib.getCurrentToken(), initial);
+    // The hint points the operator to the out-of-band delivery channels.
+    assert.ok(
+      typeof body.hint === "string" && body.hint.includes("settings.json"),
+      `response should include a hint pointing to settings.json (got ${JSON.stringify(body.hint)})`
+    );
+  });
+
+  test("resetToken:false or non-true is ignored (no rotation)", async () => {
+    const initial = settingsLib.getCurrentToken();
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ resetToken: false }), res, {});
+    // Response should be the normal snapshot, no rotation flag
+    const body = JSON.parse(res._body);
+    assert.notEqual(body.tokenRotated, true);
+    // Token should not have changed
+    assert.equal(settingsLib.getCurrentToken(), initial);
+  });
+});

@@ -24,12 +24,43 @@ const I18N = {
     cancel: '取消',
     usage: '套餐用量',
     usage_loading: '点击套餐用量加载...',
+    quota_card_title: '套餐用量 (Token Plan)',
+    quota_card_enabled: '显示套餐用量',
+    quota_card_enabled_help: '关闭后,套餐用量按钮在主界面消失',
+    quota_card_key: 'Subscription Key',
+    quota_card_key_help: '从 platform.minimaxi.com/user-center/token-plan 获取,明文存到 settings.json',
+    save: '保存',
+    clear: '清空',
+    quota_no_data_hint: '套餐用量暂未启用。点击下方按钮到「外观」面板配置。',
+    quota_go_settings: '去外观面板设置',
+    quota_disabled: '未启用',
+    quota_saved: '已保存',
+    quota_need_key: '请填 Subscription Key',
+    quota_clear_confirm: '确定清空 Subscription Key?清空后套餐用量数据不显示。',
+    quota_cleared: '已清空',
+    quota_status_configured: '已配置',
+    quota_status_not_configured: '未配置',
+    // v2026-08-28 modacker (A+C): external key source labels — shown
+    //   after the masked key in the popover + modal status line so
+    //   the user can tell where the active key is coming from.
+    //   "env" is short and matches the env var name; "file" pairs
+    //   with the resolved file path in the modal status line.
+    quota_source_env: 'env',
+    quota_source_file: 'file',
+    quota_delete_disabled_external: '当前 key 由外部源管理(env / file),无法在界面删除',
+    quota_input_placeholder_env: 'env 优先,此处的值在 env 取消前不会被使用',
+    quota_input_placeholder_file: 'file 优先,此处的值在文件移除前不会被使用',
+    quota_modal_title: '配置 Subscription Key',
+    delete_key: '删除',
     upgrade: '升级',
     appearance: '外观',
     language: '语言',
     settings: '设置',
     appearance_light: '明亮',
     appearance_dark: '深色',
+    appearance_theme: '主题',
+    appearance_theme_help: '切换亮色/深色主题',
+    appearance_quota_help: '关掉后,套餐用量按钮在主界面消失',
     language_zh: '简体中文',
     language_en: 'English',
     empty_hint_1: '还没有消息 — 在下方输入开始对话',
@@ -156,6 +187,38 @@ const I18N = {
     ask_user_no_options_hint: '无预设选项 — 用下方"其他"输入回答',
     ask_user_send_count: '发送 ({n} 题)',
     ask_user_resend_count: '已答完 ({n} 题, 点重发)',
+    // v1.0.1: 顶栏只读模式 chip (双语)
+    topbar_readonly_zh: '只读',
+    topbar_readonly_en: 'READ ONLY',
+    topbar_readonly_title: 'webui 当前处于只读模式 (远程客户端不能发送/删除)',
+    // v1.0.1: 二级 LAN 卡片 (sub-card) — 只读/Token 鉴权/接口过滤
+    lan_card_title: '局域网安全设置',
+    lan_card_readonly: '只读模式',
+    lan_card_readonly_help: '远程客户端只能读取，不能发送消息/删除会话',
+    lan_card_token_auth: 'Token 鉴权',
+    lan_card_token_auth_help: '需要 ?token= 或 Authorization header；本机不受限',
+    lan_card_reset_token: '重置 token',
+    lan_card_reset_token_confirm: '确定要重置 token? 旧 token 会立即失效',
+    lan_card_token_value: '当前 token',
+    lan_card_token_show: '显示',
+    lan_card_token_hide: '隐藏',
+    lan_card_token_saved: '已保存 — 查看请点"重置"',
+    // v1.0.1 round 8: the server no longer returns the token over
+    // HTTP. The placeholder text now points the operator to the
+    // out-of-band delivery channels (server stdout + the on-disk
+    // ~/.mcode-webui/settings.json file).
+    lan_card_token_saved_v2: '已保存 — token 在 server stdout 或 ~/.mcode-webui/settings.json',
+    // Toast shown when the server rotates the token (round 8 SSE event).
+    // The new value is NOT pushed over SSE — operator must read it
+    // from stdout/settings.json and re-open the URL.
+    token_rotated_toast: 'Token 已轮换 — 请从 server stdout 或 ~/.mcode-webui/settings.json 读取新 token，然后重新打开 URL（含 ?token=...）',
+    lan_card_token_disabled: 'Token 鉴权已关闭',
+    lan_card_token_copy: '复制',
+    lan_card_token_copied: '已复制到剪贴板',
+    lan_card_token_new_warning: '新的 token — 请在另一台设备用上面的 URL 打开',
+    lan_card_token_ack: '我已保存',
+    lan_card_token_ack_help: '保存后 token 不会再次显示；下次需要查看可点"重置"',
+    lan_card_token_rotated_toast: 'token 已重置，新值已自动同步',
   },
   en: {
     title: 'Mcode Web UI',
@@ -171,12 +234,39 @@ const I18N = {
     cancel: 'Cancel',
     usage: 'Usage',
     usage_loading: 'Click to load usage...',
+    quota_card_title: 'Quota (Token Plan)',
+    quota_card_enabled: 'Show usage',
+    quota_card_enabled_help: 'When off, the usage button disappears from the main UI',
+    quota_card_key: 'Subscription Key',
+    quota_card_key_help: 'Get from platform.minimaxi.com/user-center/token-plan. Stored in plain text in settings.json',
+    save: 'Save',
+    clear: 'Clear',
+    quota_no_data_hint: 'Quota feature is not enabled. Click the button below to open Appearance settings.',
+    quota_go_settings: 'Open Appearance settings',
+    quota_disabled: 'Disabled',
+    quota_saved: 'Saved',
+    quota_need_key: 'Enter Subscription Key',
+    quota_clear_confirm: 'Clear Subscription Key? Quota data will stop showing.',
+    quota_cleared: 'Cleared',
+    quota_status_configured: 'Configured',
+    quota_status_not_configured: 'Not configured',
+    // v2026-08-28 modacker (A+C): external key source labels
+    quota_source_env: 'env',
+    quota_source_file: 'file',
+    quota_delete_disabled_external: 'Key is managed externally (env / file); cannot be deleted from the UI',
+    quota_input_placeholder_env: 'env takes priority — this value is ignored while the env var is set',
+    quota_input_placeholder_file: 'file takes priority — this value is ignored while the file is present',
+    quota_modal_title: 'Configure Subscription Key',
+    delete_key: 'Delete',
     upgrade: 'Upgrade',
     appearance: 'Appearance',
     language: 'Language',
     settings: 'Settings',
     appearance_light: 'Light',
     appearance_dark: 'Dark',
+    appearance_theme: 'Theme',
+    appearance_theme_help: 'Toggle light/dark theme',
+    appearance_quota_help: 'When off, the usage button disappears from the main UI',
     language_zh: '中文',
     language_en: 'English',
     empty_hint_1: 'No messages yet — start typing below',
@@ -300,6 +390,32 @@ const I18N = {
     ask_user_no_options_hint: 'No preset options — type in "Other" below',
     ask_user_send_count: 'Send ({n} questions)',
     ask_user_resend_count: 'Answered ({n} questions, click to resend)',
+    // v1.0.1: Top-bar read-only chip (bilingual)
+    topbar_readonly_zh: '只读',
+    topbar_readonly_en: 'READ ONLY',
+    topbar_readonly_title: 'webui is in read-only mode (remote clients cannot send or delete)',
+    // v1.0.1: Secondary LAN card (sub-card) — read-only / token auth / interface filter
+    lan_card_title: 'LAN Security',
+    lan_card_readonly: 'Read-only mode',
+    lan_card_readonly_help: 'Remote clients can only read; cannot send or delete',
+    lan_card_token_auth: 'Token auth',
+    lan_card_token_auth_help: 'Requires ?token= or Authorization header; loopback exempt',
+    lan_card_reset_token: 'Reset token',
+    lan_card_reset_token_confirm: 'Reset the token? The old token becomes invalid immediately.',
+    lan_card_token_value: 'Current token',
+    lan_card_token_show: 'Show',
+    lan_card_token_hide: 'Hide',
+    lan_card_token_saved: 'Saved — click "Reset" to view again',
+    // v1.0.1 round 8 (mirror of zh-CN key above)
+    lan_card_token_saved_v2: 'Saved — token lives in server stdout or ~/.mcode-webui/settings.json',
+    token_rotated_toast: 'Token rotated — read the new value from server stdout or ~/.mcode-webui/settings.json, then re-open the URL with ?token=...',
+    lan_card_token_disabled: 'Token auth disabled',
+    lan_card_token_copy: 'Copy',
+    lan_card_token_copied: 'Copied to clipboard',
+    lan_card_token_new_warning: 'New token — open the URL on another device to test',
+    lan_card_token_ack: 'I have saved it',
+    lan_card_token_ack_help: 'After saving the token will not be shown again; reset to view again',
+    lan_card_token_rotated_toast: 'Token rotated, new value auto-synced',
   }
 }
 // v0.5.bh: 首次加载默认英文（用户反馈），有缓存时读缓存
@@ -339,6 +455,10 @@ const APPEARANCE_ICON_MOON = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 
 export function applyTheme() {
   document.documentElement.setAttribute('data-theme', theme)
   document.getElementById('appearance-value').textContent = t(theme === 'light' ? 'appearance_light' : 'appearance_dark')
+  // v2026-08-28 modacker: sync the appearance-card's theme checkbox
+  // (the new "外观" popover) with the current theme.
+  const cardCheckbox = document.getElementById('appearance-card-theme')
+  if (cardCheckbox) cardCheckbox.checked = theme === 'dark'
   const icon = document.getElementById('appearance-icon')
   if (icon) icon.innerHTML = (theme === 'light') ? APPEARANCE_ICON_SUN : APPEARANCE_ICON_MOON
 }
