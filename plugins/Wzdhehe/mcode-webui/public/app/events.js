@@ -5,8 +5,8 @@
 
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
-import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, connect, es, getGeneralQuota, leftOpen, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
-import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
+import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, closeApiKeyModal, connect, es, getGeneralQuota, leftOpen, openApiKeyModal, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setLeftOpen, setRightOpen, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
+import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderLanCardContent, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
 
 export let slashOpen = false
 export let slashQuery = ''
@@ -373,10 +373,37 @@ export function attachEvents() {
   document.getElementById('usage-popover-refresh')?.addEventListener('click', () => refreshUsage({ manual: true }))
 
   // Search sessions input — 实时过滤 sidebar 列表
-  document.getElementById('search-input')?.addEventListener('input', (e) => {
-    sessionSearchQuery = e.target.value || ''
-    renderSessions()
-  })
+  // v2026-08-28 modacker fix: use the setSearchQuery setter; direct
+  // assignment to the imported `let` binding throws "Assignment to
+  // constant variable" because the import binding is read-only.
+  //
+  // v2026-08-28 modacker (autofill defense): Chrome's profile
+  //   autofill ignores `autocomplete="off"` + `type="search"` for
+  //   pages where it has previously cached a value. The proven
+  //   workaround is the `readonly` attribute — Chrome (and other
+  //   password managers) skip readonly inputs entirely, so they
+  //   can't inject a value. We strip `readonly` on the very first
+  //   user-driven event (focus / mousedown / keydown) so typing
+  //   works normally thereafter. The DOM is observable enough
+  //   that this doesn't fight the user — by the time they tap
+  //   the input we have already cleared the autofill artifact.
+  const searchInput = document.getElementById('search-input')
+  if (searchInput) {
+    // The HTML markup sets `readonly` so Chrome's autofill
+    // leaves it alone. Strip on any user-initiated interaction.
+    const stripReadonly = () => {
+      if (searchInput.hasAttribute('readonly')) {
+        searchInput.removeAttribute('readonly')
+      }
+    }
+    searchInput.addEventListener('mousedown', stripReadonly, { once: true, capture: true })
+    searchInput.addEventListener('keydown', stripReadonly, { once: true, capture: true })
+    searchInput.addEventListener('focus', stripReadonly, { once: true, capture: true })
+    searchInput.addEventListener('input', (e) => {
+      setSearchQuery(e.target.value || '')
+      renderSessions()
+    })
+  }
 
   // Attach
   document.getElementById('btn-attach').addEventListener('click', () => fileInput.click())
@@ -410,7 +437,62 @@ export function attachEvents() {
   // })
 
   // Appearance / Language buttons
-  document.getElementById('btn-appearance').addEventListener('click', () => { toggleTheme() })
+  // v2026-08-28 modacker: btn-appearance now opens the appearance
+  // settings card (which has the theme toggle, plus the
+  // "套餐用量" toggle and key input). The theme toggle is moved
+  // inside the card (#appearance-card-theme).
+  const btnAppearance = document.getElementById('btn-appearance')
+  const appearanceCard = document.getElementById('appearance-card')
+  const appearanceCardTheme = document.getElementById('appearance-card-theme')
+  function setAppearanceCardOpen(open) {
+    if (!appearanceCard || !btnAppearance) return
+    appearanceCard.hidden = !open
+    btnAppearance.setAttribute('aria-expanded', open ? 'true' : 'false')
+  }
+  function toggleAppearanceCard() {
+    setAppearanceCardOpen(appearanceCard ? appearanceCard.hidden : false)
+  }
+  if (btnAppearance) {
+    btnAppearance.addEventListener('click', (e) => {
+      e.stopPropagation()
+      toggleAppearanceCard()
+    })
+  }
+  // Click outside to close.
+  document.addEventListener('click', (e) => {
+    if (!appearanceCard || appearanceCard.hidden) return
+    if (appearanceCard.contains(e.target) || btnAppearance.contains(e.target)) return
+    setAppearanceCardOpen(false)
+  })
+  if (appearanceCardTheme) {
+    appearanceCardTheme.addEventListener('change', () => {
+      toggleTheme()
+    })
+  }
+
+  // v2026-08-28 modacker: 套餐用量显示开关. 关掉 → 主 UI 按钮消失.
+  const appearanceCardQuota = document.getElementById('appearance-card-quota')
+  if (appearanceCardQuota) {
+    appearanceCardQuota.addEventListener('change', async (e) => {
+      const enabled = !!e.target.checked
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ quotaEnabled: enabled }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); e.target.checked = !enabled; return }
+        if (state) state.quotaEnabled = d.quotaEnabled === true
+        render()  // re-render to update btn-usage visibility
+        try { await fetch('/api/usage' + API_SUFFIX, { method: 'POST', headers: HEADERS }) } catch {}
+      } catch (err) {
+        console.error('[appearance-card-quota] toggle failed', err)
+        alert('切换失败: ' + err.message)
+        e.target.checked = !enabled
+      }
+    })
+  }
   document.getElementById('btn-language').addEventListener('click', () => { toggleLang() })
 
   // Usage button → toggle popover
@@ -888,11 +970,50 @@ export function attachEvents() {
     }
   } catch {}
 
-  // v0.5.aq: chip-lan toggle — 点 chip 切换 LAN 访问（访问 URL 在顶栏 chip，点击复制）
+  // v0.5.aq: chip-lan — v1.0.1 起改为"点开二级卡片"入口（不再直接 toggle LAN）
   const chipLan = document.getElementById('chip-lan')
   // v0.5.bp: 顶栏 LAN 访问链接 chip（LAN on 时显示当前 IP，点复制完整 URL）
   const chipLanLink = document.getElementById('chip-lan-link')
   const chipLanLinkText = document.getElementById('chip-lan-link-text')
+
+  // v1.0.1: 二级卡片 DOM 引用
+  const lanCard = document.getElementById('lan-card')
+  const lanCardBroadcast = document.getElementById('lan-card-broadcast')
+  const lanCardReadonly = document.getElementById('lan-card-readonly')
+  const lanCardTokenAuth = document.getElementById('lan-card-token-auth')
+  const lanCardTokenMask = document.getElementById('lan-card-token-mask')
+  const lanCardTokenValue = document.getElementById('lan-card-token-value')
+  const lanCardTokenRow = document.getElementById('lan-card-token-row')
+  const lanCardTokenToggle = document.getElementById('lan-card-token-toggle')
+  const lanCardTokenCopy = document.getElementById('lan-card-token-copy')
+  const lanCardTokenWarning = document.getElementById('lan-card-token-warning')
+  const lanCardTokenReset = document.getElementById('lan-card-token-reset')
+  const lanCardTokenAck = document.getElementById('lan-card-token-ack')
+
+  // 二级卡片开/合（chip-lan click）
+  function setLanCardOpen(open) {
+    if (!lanCard || !chipLan) return
+    lanCard.hidden = !open
+    chipLan.setAttribute('aria-expanded', open ? 'true' : 'false')
+  }
+  function toggleLanCard() {
+    setLanCardOpen(lanCard ? lanCard.hidden : false)
+  }
+
+  // 点击 chip = 切二级卡片
+  if (chipLan) {
+    chipLan.addEventListener('click', (e) => {
+      e.stopPropagation()
+      toggleLanCard()
+    })
+  }
+
+  // 点击 chip 外部关闭卡片
+  document.addEventListener('click', (e) => {
+    if (!lanCard || lanCard.hidden) return
+    if (lanCard.contains(e.target) || chipLan.contains(e.target)) return
+    setLanCardOpen(false)
+  })
 
   async function loadLanInfo() {
     try {
@@ -900,21 +1021,53 @@ export function attachEvents() {
       const d = await r.json()
       if (!d.ok) return
       // v0.5.bp: 顶栏链接 chip 始终更新 URL（data-lan-url 留着点复制时用），可见性由 render() 决定
+      // v1.0.1: 用 lanUrlWithToken (含 ?token=xxx) 复制给远程设备, 显示只用 lanUrl
+      //   (host:port) — 防止 token 露在 top-bar 文本上
       if (chipLanLink) {
-        chipLanLink.setAttribute('data-lan-url', d.lanUrl || '')
+        chipLanLink.setAttribute('data-lan-url', d.lanUrlWithToken || d.lanUrl || '')
         if (chipLanLinkText) {
-          // 只显示 host:port（去掉 http:// 前缀，紧凑）
           const u = (d.lanUrl || '').replace(/^https?:\/\//, '')
           chipLanLinkText.textContent = u || '—'
         }
       } else {
         console.warn('[lan] chipLanLink NOT found in DOM — element missing?')
       }
+      // v1.0.1: 把 settings 同步到 state, sub-card 渲染靠 state
+      if (state) {
+        state.lanBroadcast = d.lanBroadcast
+        state.readOnly = d.readOnly
+        state.tokenEnabled = d.tokenEnabled
+        state.tokenAcknowledged = d.tokenAcknowledged
+        state.currentToken = d.currentToken || ''
+        state.tokenRotatedAt = d.tokenRotatedAt || 0
+        // v2026-08-28 modacker: Token Plan feature state. The popover
+        // (renderUsagePopover in state.js) reads these directly, so
+        // just keep them in sync. The appearance-card-quota checkbox
+        // is also synced from here.
+        // v2026-08-28 modacker (A+C): also sync the external key
+        //   source + file path so the modal can show "managed by
+        //   env / file" and hide the "delete" button when the key
+        //   is external. See server/lib/settings.js for the
+        //   priority chain.
+        state.quotaEnabled = d.quotaEnabled === true
+        state.hasTokenPlanKey = d.hasTokenPlanKey === true
+        state.tokenPlanApiKeyMasked = d.tokenPlanApiKeyMasked || ''
+        state.tokenPlanApiKeySource = d.tokenPlanApiKeySource || ''
+        state.tokenPlanApiKeyFilePath = d.tokenPlanApiKeyFilePath || ''
+        const apCardQuota = document.getElementById('appearance-card-quota')
+        if (apCardQuota) apCardQuota.checked = d.quotaEnabled === true
+      }
+      // Refresh the popover if it's open (otherwise the next click
+      // will re-render via the click handler).
+      try {
+        const popover = document.getElementById('usage-popover')
+        if (popover && !popover.hidden) renderUsagePopover()
+      } catch {}
     } catch (e) { console.error('[lan] load failed', e) }
   }
-  loadLanInfo()  // 启动时拉一次（hover 时再刷新一次也 OK）
+  loadLanInfo()  // 启动时拉一次
 
-  // v0.5.bp: 顶栏 LAN 链接点击 = 复制完整 URL 到剪贴板（data-lan-url 由 loadLanInfo 填入，URL 来自 server 的 detectLanIp()，非硬编码）
+  // v0.5.bp: 顶栏 LAN 链接点击 = 复制完整 URL 到剪贴板
   if (chipLanLink) {
     chipLanLink.addEventListener('click', async (e) => {
       e.preventDefault()
@@ -929,32 +1082,256 @@ export function attachEvents() {
     })
   }
 
-  // 点击 chip = 切换 LAN 访问 on/off
-  if (chipLan) {
-    chipLan.addEventListener('click', async (e) => {
-    e.stopPropagation()
-    const wasOn = chipLan.getAttribute('data-lan') === 'on'
-    const enabled = !wasOn
+  // ----------------------------------------------------------------
+  // v1.0.1: sub-card handlers
+  // ----------------------------------------------------------------
+
+  // LAN 广播 toggle (在卡片里)
+  if (lanCardBroadcast) {
+    lanCardBroadcast.addEventListener('change', async (e) => {
+      const enabled = !!e.target.checked
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ lanBroadcast: enabled }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); e.target.checked = !enabled; return }
+        if (state) state.lanBroadcast = enabled
+        render()
+        showToast(enabled ? t('lan_title_on') : t('lan_title_off'))
+      } catch (err) {
+        console.error('[lan] toggle failed', err)
+        alert('切换失败: ' + err.message)
+        e.target.checked = !enabled
+      }
+    })
+  }
+
+  // 只读模式 toggle
+  if (lanCardReadonly) {
+    lanCardReadonly.addEventListener('change', async (e) => {
+      const enabled = !!e.target.checked
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ readOnly: enabled }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); e.target.checked = !enabled; return }
+        if (state) state.readOnly = enabled
+        render()
+      } catch (err) {
+        console.error('[lan] readOnly toggle failed', err)
+        alert('切换失败: ' + err.message)
+        e.target.checked = !enabled
+      }
+    })
+  }
+
+  // Token 鉴权 toggle
+  if (lanCardTokenAuth) {
+    lanCardTokenAuth.addEventListener('change', async (e) => {
+      const enabled = !!e.target.checked
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ tokenEnabled: enabled }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); e.target.checked = !enabled; return }
+        if (state) state.tokenEnabled = enabled
+        render()
+      } catch (err) {
+        console.error('[lan] tokenEnabled toggle failed', err)
+        alert('切换失败: ' + err.message)
+        e.target.checked = !enabled
+      }
+    })
+  }
+
+  // Token 显示/隐藏 — 用 row 事件代理, row 内部 HTML 被 renderLanCardContent
+  // 替换时 (acknowledged 后) 新的按钮自动继承 handler, 不需要重新 bind
+  if (lanCardTokenRow) {
+    lanCardTokenRow.addEventListener('click', (e) => {
+      const toggleBtn = e.target.closest('#lan-card-token-toggle')
+      const copyBtn = e.target.closest('#lan-card-token-copy')
+      if (toggleBtn) {
+        const valueEl = document.getElementById('lan-card-token-value')
+        const maskEl = document.getElementById('lan-card-token-mask')
+        if (!valueEl || !maskEl) return
+        const showing = !valueEl.hidden
+        if (showing) {
+          valueEl.hidden = true
+          maskEl.hidden = false
+          toggleBtn.textContent = t('lan_card_token_show')
+        } else {
+          valueEl.hidden = false
+          maskEl.hidden = true
+          toggleBtn.textContent = t('lan_card_token_hide')
+        }
+        return
+      }
+      if (copyBtn) {
+        const tok = (state && state.currentToken) || ''
+        if (!tok) {
+          showToast(t('lan_card_token_value') + ': (empty)', 1500)
+          return
+        }
+        ;(async () => {
+          try {
+            await navigator.clipboard.writeText(tok)
+            showToast(t('lan_card_token_copied'), 1500)
+          } catch (err) {
+            showToast(t('copy_failed') + ': ' + err.message, 2000)
+          }
+        })()
+        return
+      }
+    })
+  }
+
+  // Token 重置
+  if (lanCardTokenReset) {
+    lanCardTokenReset.addEventListener('click', async () => {
+      if (!confirm(t('lan_card_reset_token_confirm'))) return
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ resetToken: true }),
+        })
+        const d = await r.json()
+        if (!d.ok || d.tokenRotated !== true) {
+          alert('重置失败: ' + (d.error || '未知错误'))
+          return
+        }
+        // 服务端已通过 SSE 推送新 token (auth.token_rotated) — 我们的 setToken handler 会更新 localStorage + HEADERS
+        // 这里再把 state 同步一下, 让 UI 立即反映
+        if (state) {
+          state.currentToken = d.currentToken || ''
+          state.tokenAcknowledged = false
+          state.tokenRotatedAt = d.tokenRotatedAt || Date.now()
+        }
+        // 强制显示新 token (因为 acknowledged 重置为 false)
+        if (lanCardTokenValue) lanCardTokenValue.hidden = false
+        if (lanCardTokenMask) lanCardTokenMask.hidden = true
+        if (lanCardTokenToggle) lanCardTokenToggle.textContent = t('lan_card_token_hide')
+        render()
+        showToast(t('lan_card_token_rotated_toast'), 2000)
+      } catch (err) {
+        console.error('[lan] resetToken failed', err)
+        alert('重置失败: ' + err.message)
+      }
+    })
+  }
+
+  // "我已保存" — 确认 token, 之后服务端不再下发 currentToken
+  if (lanCardTokenAck) {
+    lanCardTokenAck.addEventListener('click', async () => {
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ acknowledgeToken: true }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('确认失败: ' + (d.error || '未知错误')); return }
+        if (state) {
+          state.tokenAcknowledged = true
+          state.currentToken = ''
+        }
+        render()
+      } catch (err) {
+        console.error('[lan] acknowledgeToken failed', err)
+        alert('确认失败: ' + err.message)
+      }
+    })
+  }
+
+  // ----------------------------------------------------------------
+  // v2026-08-28 modacker: API Key 配置模态框 handlers.
+  // 由 popover 底部状态按钮唤起,save / delete / cancel / close / Esc
+  // ----------------------------------------------------------------
+  const apiKeyModal = document.getElementById('api-key-modal')
+  const apiKeyInput = document.getElementById('api-key-modal-input')
+  const apiKeySave = document.getElementById('api-key-modal-save')
+  const apiKeyDelete = document.getElementById('api-key-modal-delete')
+  const apiKeyCancel = document.getElementById('api-key-modal-cancel')
+  const apiKeyClose = document.getElementById('api-key-modal-close')
+
+  async function saveApiKey() {
+    const k = (apiKeyInput?.value || '').trim()
+    if (!k) { showToast(t('quota_need_key') || '请先填入 Subscription Key'); return }
     try {
       const r = await fetch('/api/settings' + API_SUFFIX, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...HEADERS },
-        body: JSON.stringify({ lanBroadcast: enabled }),
+        body: JSON.stringify({ tokenPlanApiKey: k, quotaEnabled: true }),
       })
       const d = await r.json()
-      if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); return }
-      if (state) state.lanBroadcast = enabled
-      render()
-      showToast(enabled ? t('lan_title_on') : t('lan_title_off'))
-    } catch (e) {
-      console.error('[lan] toggle failed', e)
-      alert('切换失败: ' + e.message)
+      if (!d.ok) { showToast(d.error || '保存失败'); return }
+      if (apiKeyInput) apiKeyInput.value = ''
+      if (state) {
+        state.quotaEnabled = d.quotaEnabled === true
+        state.hasTokenPlanKey = d.hasTokenPlanKey === true
+        state.tokenPlanApiKeyMasked = d.tokenPlanApiKeyMasked || ''
+      }
+      try { await fetch('/api/usage' + API_SUFFIX, { method: 'POST', headers: HEADERS }) } catch {}
+      renderUsage()
+      closeApiKeyModal()
+      showToast(t('quota_saved') || '已保存')
+    } catch (err) {
+      console.error('[api-key-modal] save failed', err)
     }
-  })
   }
 
-  // v0.5.bx-40: LAN URL hover popover 已删除 — 顶栏 chip-lan-link 已展示访问地址（点击复制），
-  //   且旧 popover 定位在 LAN 卡片正下方，会盖住 GitHub 链接
+  async function deleteApiKey() {
+    if (!confirm(t('quota_clear_confirm') || '确定清空 Subscription Key?清空后套餐用量数据不显示。')) return
+    try {
+      await fetch('/api/settings' + API_SUFFIX, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...HEADERS },
+        body: JSON.stringify({ tokenPlanApiKey: '' }),
+      })
+      if (state) {
+        state.hasTokenPlanKey = false
+        state.tokenPlanApiKeyMasked = ''
+      }
+      try { await fetch('/api/usage' + API_SUFFIX, { method: 'POST', headers: HEADERS }) } catch {}
+      renderUsage()
+      closeApiKeyModal()
+      showToast(t('quota_cleared') || '已清空')
+    } catch (err) {
+      console.error('[api-key-modal] delete failed', err)
+    }
+  }
+
+  if (apiKeySave) apiKeySave.addEventListener('click', saveApiKey)
+  if (apiKeyDelete) apiKeyDelete.addEventListener('click', deleteApiKey)
+  if (apiKeyCancel) apiKeyCancel.addEventListener('click', closeApiKeyModal)
+  if (apiKeyClose) apiKeyClose.addEventListener('click', closeApiKeyModal)
+  // Click outside the modal-card to close
+  if (apiKeyModal) {
+    apiKeyModal.addEventListener('click', (e) => {
+      if (e.target === apiKeyModal) closeApiKeyModal()
+    })
+  }
+  // Esc to close
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && apiKeyModal && !apiKeyModal.hidden) {
+      closeApiKeyModal()
+    }
+  })
+  // Enter to save when input focused
+  if (apiKeyInput) {
+    apiKeyInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') saveApiKey()
+    })
+  }
 
   // New chat
   // v0.5.ar: 新建会话 → 弹工作区选择 popover（选完工作区再调 /api/sessions）

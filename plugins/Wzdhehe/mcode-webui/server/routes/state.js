@@ -19,6 +19,18 @@ import {
 import { getLanBroadcast } from "../lib/settings.js";
 import { applyMavisUsageToCs } from "../lib/mavis-usage.js";
 import { getMcodeModelLimit } from "../lib/models.js";
+import {
+  getCurrentToken,
+  getQuotaEnabled,
+  getReadOnly,
+  getTokenAcknowledged,
+  getTokenEnabled,
+  getTokenPlanApiKey,
+  getTokenPlanApiKeyFilePath,
+  getTokenPlanApiKeySource,
+  getTokenRotatedAt,
+  maskTokenPlanKey,
+} from "../lib/settings.js";
 
 export async function handleEvents(req, res, ctx) {
   const cid = getCidFromReq(req);
@@ -32,10 +44,28 @@ export async function handleEvents(req, res, ctx) {
   }
   res.writeHead(200, SSE_HEADERS);
   // v1.0: 首推也必须带 mcodeSessions 字段 (之前缺, 侧栏先渲染 webui 本地条目再闪回全量)
+  // v1.0.1: 首推也必须带 settings fields (readOnly / tokenEnabled / currentToken
+  //   conditional on acknowledged, etc) — 否则 sub-card 第一次 render 时是空的
   const snapshot = {
     ...cs,
     sessions: loadSessions(),
     ...mcodeSessionsSnapshotFields((cs.workspace && cs.workspace.dir) || ""),
+    lanBroadcast: getLanBroadcast(),
+    readOnly: getReadOnly(),
+    tokenEnabled: getTokenEnabled(),
+    currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
+    tokenAcknowledged: getTokenAcknowledged(),
+    tokenRotatedAt: getTokenRotatedAt(),
+    // v2026-08-28 modacker: Token Plan (套餐用量) feature fields.
+    //   See state-bus.js for the rationale. The first SSE push on
+    //   connection must include them too, otherwise the appearance
+    //   card's quota toggle would initialize in the wrong state.
+    quotaEnabled: getQuotaEnabled(),
+    hasTokenPlanKey: getTokenPlanApiKey().length > 0,
+    tokenPlanApiKeyMasked: maskTokenPlanKey(),
+    // v2026-08-28 modacker (A+C): external key source surface.
+    tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+    tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
   };
   res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
   setSseClient(cid, res);
@@ -101,6 +131,27 @@ export async function handleState(req, res, ctx) {
       mcodeSessions,
       availableCommands: getCachedMcodeCommands(),
       lanBroadcast: getLanBroadcast(),
+      // v1.0.1: include the full settings surface so the sub-card
+      // renders correctly on first /api/state fetch (before the SSE
+      // connection delivers its first state push).
+      readOnly: getReadOnly(),
+      tokenEnabled: getTokenEnabled(),
+      // Only send currentToken when not acknowledged — same policy as
+      // the SSE push (see state-bus.js).
+      currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
+      tokenAcknowledged: getTokenAcknowledged(),
+      tokenRotatedAt: getTokenRotatedAt(),
+      // v2026-08-28 modacker: Token Plan (套餐用量) feature fields —
+      //   see state-bus.js for the rationale. /api/state is the path
+      //   the client uses as a fallback when SSE isn't connected yet
+      //   (e.g., before attachEvents runs); it must carry the same
+      //   fields as the SSE snapshot.
+      quotaEnabled: getQuotaEnabled(),
+      hasTokenPlanKey: getTokenPlanApiKey().length > 0,
+      tokenPlanApiKeyMasked: maskTokenPlanKey(),
+      // v2026-08-28 modacker (A+C): external key source surface.
+      tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+      tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
     }),
   );
 }

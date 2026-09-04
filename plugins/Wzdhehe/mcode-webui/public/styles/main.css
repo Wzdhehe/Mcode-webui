@@ -292,6 +292,26 @@ a.chip-lan-link .icon {
 .chip-workspace:hover { background: var(--bg-hover, rgba(0,0,0,0.04)); border-color: var(--accent); }
 .chip-workspace:active { background: var(--bg-active, rgba(0,0,0,0.08)); }
 .chip-workspace-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* v1.0.1: 只读模式 chip — 红色背景 + 白字, 双语 ("只读 / READ ONLY")
+   醒目的视觉提示, 让任何 client (本机 / 远程) 都能一眼看到当前
+   webui 处于只读模式. */
+.chip-readonly {
+  background: var(--danger);
+  color: #fff;
+  border: 1px solid var(--danger);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  animation: pulse-readonly 2.4s ease-in-out infinite;
+}
+.chip-readonly-sep {
+  opacity: 0.6;
+  font-weight: 400;
+  margin: 0 -2px;
+}
+@keyframes pulse-readonly {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--danger-rgb, 192, 57, 43), 0.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(var(--danger-rgb, 192, 57, 43), 0); }
+}
 
 /* v0.5.al: workspace picker popover（fixed 定位，跟随 chip-workspace） */
 .workspace-picker {
@@ -906,6 +926,11 @@ body.is-remote .btn-lan-toggle { display: none; }
 /* v0.5.z: 套餐用量按钮 + 右侧弹层（mmx quota + 本机时间自算） */
 .btn-menu#btn-usage { position: relative; }
 .btn-menu#btn-usage[aria-expanded="true"] { background: var(--bg-hover); }
+/* v2026-08-28 modacker: when quota feature is off (no Subscription
+   Key set, or quotaEnabled=false in settings), the entire button
+   is hidden — not just a "—", but gone. The popover is hidden by
+   the same toggle on its parent renderUsage() call. */
+.btn-menu#btn-usage.usage-hidden { display: none; }
 .usage-popover {
   position: absolute;
   bottom: 0;
@@ -965,6 +990,241 @@ body.is-remote .btn-lan-toggle { display: none; }
 .usage-loading { color: var(--text-muted); font-style: italic; padding: 4px 0; }
 .usage-error { color: var(--danger); padding: 4px 0; line-height: 1.5; word-break: break-word; }
 .usage-empty { color: var(--text-muted); padding: 4px 0; font-style: italic; }
+
+/* v2026-08-28 modacker: 套餐用量 popover 顶部嵌入 key 配置区 */
+.usage-popover-config {
+  padding: 4px 0 6px;
+}
+.usage-popover-config-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.usage-popover-config-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.usage-popover-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: var(--text);
+}
+.usage-popover-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+.usage-popover-toggle-label { line-height: 1; }
+.usage-popover-key-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input, var(--bg-card));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+.usage-popover-save-btn,
+.usage-popover-clear-btn {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.usage-popover-save-btn:hover { background: var(--bg-hover); }
+.usage-popover-clear-btn:hover { background: var(--bg-hover); color: var(--danger); }
+.usage-popover-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  word-break: break-all;
+}
+.usage-popover-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 0 4px;
+}
+
+/* v2026-08-28 modacker: API Key 状态按钮(底部,绿/红) */
+.api-key-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: background 0.15s, border-color 0.15s;
+}
+.api-key-status:hover { background: var(--bg-hover); }
+.api-key-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.api-key-status.configured {
+  border-color: var(--success, #16a34a);
+  color: var(--success, #16a34a);
+}
+.api-key-status.configured .api-key-status-dot {
+  background: var(--success, #16a34a);
+  box-shadow: 0 0 6px var(--success, #16a34a);
+}
+.api-key-status.not-configured {
+  border-color: var(--danger, #dc2626);
+  color: var(--danger, #dc2626);
+}
+.api-key-status.not-configured .api-key-status-dot {
+  background: var(--danger, #dc2626);
+  box-shadow: 0 0 6px var(--danger, #dc2626);
+}
+.api-key-status-text { flex: 1; }
+
+/* v2026-08-28 modacker: API Key 配置模态框 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+.modal-overlay[hidden] { display: none; }
+.modal-card {
+  background: var(--bg-card, var(--bg-sidebar));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  min-width: 360px;
+  max-width: 480px;
+  width: 90%;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.modal-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-card-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.modal-card-close {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.modal-card-close:hover { color: var(--text); }
+.modal-card-body {
+  padding: 12px 16px;
+}
+.modal-card-status {
+  font-size: 12px;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+.modal-card-status.configured { color: var(--success, #16a34a); }
+.modal-card-status.not-configured { color: var(--danger, #dc2626); }
+.modal-card-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.modal-card-input {
+  width: 100%;
+  background: var(--bg-input, var(--bg-card));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.modal-card-input:focus {
+  outline: none;
+  border-color: var(--accent, #3b82f6);
+}
+/* v2026-08-28 modacker: Subscription Key input — visually password-like
+   but semantically type="text" (so the browser's password autofill
+   pipeline doesn't classify the entire page as a credential form
+   and start injecting emails/usernames into every other text input).
+   `-webkit-text-security: disc` renders each char as a bullet point
+   on Chrome/Safari; Firefox falls back to monospace + letter-spacing
+   (still readable as a masked secret, just not bullet-masked). */
+.modal-card-input.secret-input,
+#api-key-modal-input.secret-input {
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 2px;
+  -webkit-text-security: disc;
+}
+.modal-card-help {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.modal-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.modal-card-btn {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.modal-card-btn:hover { background: var(--bg-hover); }
+.modal-card-btn-primary {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  border-color: var(--accent, #3b82f6);
+}
+.modal-card-btn-primary:hover { filter: brightness(0.9); }
+.modal-card-btn-danger {
+  color: var(--danger, #dc2626);
+  border-color: var(--danger, #dc2626);
+  margin-right: auto;  /* push to the left */
+}
+.modal-card-btn-danger:hover {
+  background: var(--danger, #dc2626);
+  color: #fff;
+}
 
 /* v0.5.bb: toast 通知（用量刷新成功提示）
    v1.0: #toast 元素补齐（此前 index.html 缺该元素, showToast 一直空转）;
@@ -2509,6 +2769,9 @@ body.is-remote .btn-lan-toggle { display: none; }
   .chat-area { width: 100%; }
   .btn-mobile-toggle { display: inline-flex !important; }
   .topbar-status { display: none; }
+  /* v1.0.1: 移动端也必须显示只读 chip (read-only 是关键安全提示, 不能因为
+     viewport 小就藏起来让用户漏掉) */
+  .topbar-status .chip-readonly { display: inline-flex; }
 }
 @media (max-width: 600px) {
   .chat-inner { padding: 0 12px; }
@@ -2864,3 +3127,208 @@ body.is-remote .btn-lan-toggle { display: none; }
   content: '⚡';
   margin-right: 4px;
 }
+
+/* ============================================================
+   v1.0.1: LAN sub-card (二级卡片)
+   点开 #chip-lan 后展开；含只读/Token 鉴权/接口过滤等
+   ============================================================ */
+.lan-card {
+  /* v1.0.1: popover 模式 — 浮在 sidebar 右边, 不挤压下方 GitHub 链接 */
+  position: fixed;
+  left: 248px;  /* left-panel 宽度 (240) + 8px gap */
+  bottom: 70px; /* 离底部 GitHub 链接留点空间 */
+  width: 320px;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+  padding: 12px 14px 14px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  font-size: 12.5px;
+  color: var(--text);
+  z-index: 100;
+}
+/* v1.0.1: 移动端 sidebar 折叠时, sub-card 不能还按 248px 左边距定位 (会跑出屏幕)
+   fallback: 占满 viewport, 留 16px 边距 */
+@media (max-width: 600px) {
+  .lan-card {
+    left: 16px;
+    right: 16px;
+    width: auto;
+    bottom: 60px;
+    max-height: calc(100vh - 80px);
+  }
+  /* 折叠的 sidebar 状态下, 卡片不显示指向 sidebar 的三角箭头 (没意义) */
+  .lan-card::before { display: none; }
+}
+/* 小三角箭头指向 chip-lan (在卡片左下) */
+.lan-card::before {
+  content: "";
+  position: absolute;
+  left: -7px;
+  bottom: 24px;
+  width: 12px;
+  height: 12px;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  transform: rotate(45deg);
+}
+.lan-card[hidden] { display: none; }
+.lan-card-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+.lan-card-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.lan-card-row:last-of-type { border-bottom: none; }
+.lan-card-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.lan-card-row-label > span:first-child {
+  font-weight: 500;
+  color: var(--text);
+}
+.lan-card-row-help {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+.lan-card-toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.lan-card-toggle input { opacity: 0; width: 0; height: 0; }
+.lan-card-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--border);
+  border-radius: 20px;
+  transition: background 0.2s;
+}
+.lan-card-toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 14px; width: 14px;
+  left: 3px; bottom: 3px;
+  background: var(--bg-elevated);
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+.lan-card-toggle input:checked + .lan-card-toggle-slider { background: var(--status-on); }
+.lan-card-toggle input:checked + .lan-card-toggle-slider::before { transform: translateX(16px); }
+.lan-card-toggle input:focus + .lan-card-toggle-slider { box-shadow: 0 0 0 2px var(--accent-bg); }
+.lan-card-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+.lan-card-section-label {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.lan-card-token-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.lan-card-token-mask,
+.lan-card-token-value {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+.lan-card-token-value {
+  color: var(--text);
+}
+.lan-card-token-placeholder {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  flex: 1;
+  text-align: left;
+}
+.lan-card-btn {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.lan-card-btn:hover { background: var(--bg-hover); border-color: var(--border); }
+.lan-card-btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.lan-card-btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.lan-card-btn-danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.lan-card-btn-danger:hover { background: var(--danger); color: var(--on-accent); }
+.lan-card-warning {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--text);
+  line-height: 1.5;
+}
+.lan-card-warning::before {
+  content: '⚠ ';
+  margin-right: 2px;
+}
+.lan-card-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.lan-card-help {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+/* chip-lan 展开态 — chevron 旋转提示 */
+.btn-lan-toggle[aria-expanded="true"] .btn-chevron { transform: rotate(90deg); }
+.btn-lan-toggle .btn-chevron { transition: transform 0.2s; }
