@@ -406,7 +406,13 @@ export async function handleFork(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    const r = await client.fork(
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      const r = await client.fork(
       cs.mcodeSessionId,
       atMessageId,
       workspace || undefined,
@@ -466,7 +472,13 @@ export async function handleResume(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    await client.resume(
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      await client.resume(
       targetSid,
       (cs.workspace && cs.workspace.dir) || undefined,
     );
@@ -489,6 +501,7 @@ export async function handleResume(req, res, ctx) {
 //   body: { sessionId }
 //   仅切换 mcode 侧的 current session 语义; webui 本地视图用 /api/sessions/switch
 export async function handleAcpActivate(req, res, ctx) {
+  const cs = ctx.cs;
   const payload = await readJson(req);
   const sessionId = payload.sessionId;
   if (!sessionId) {
@@ -499,7 +512,13 @@ export async function handleAcpActivate(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    await client.activate(sessionId);
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      await client.activate(sessionId);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, sessionId }));
   } catch (e) {
@@ -516,6 +535,7 @@ export async function handleAcpActivate(req, res, ctx) {
 //   turn 运行中调用 = 取消该 turn (prompt 以 stopReason:"cancelled" 返回)。
 //   会话本身保留在 session/list (mcode 没有 ACP 面的 delete/archive)。
 export async function handleAcpClose(req, res, ctx) {
+  const cs = ctx.cs;
   const payload = await readJson(req);
   const sessionId = payload.sessionId;
   if (!sessionId) {
@@ -526,7 +546,13 @@ export async function handleAcpClose(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    await client.closeSession(sessionId);
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      await client.closeSession(sessionId);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, sessionId }));
   } catch (e) {

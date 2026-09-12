@@ -168,7 +168,13 @@ export async function handleStop(_req, res, ctx) {
       const client = new McodeAcpClient({ debug: false });
       try {
         await client.start();
-        // v1.1: mcode 0.3+ 没有 session/cancel — acp.mjs 内部回退到
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+          // v1.1: mcode 0.3+ 没有 session/cancel — acp.mjs 内部回退到
         // close + load；cwd 必须给对，否则 load 挂错工作区
         await client.cancel(
           cs.mcodeSessionId,
@@ -257,7 +263,13 @@ export async function handleQueue(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    const r = await client.queue(cs.mcodeSessionId, text);
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      const r = await client.queue(cs.mcodeSessionId, text);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, item: r || null }));
   } catch (e) {
@@ -282,7 +294,13 @@ export async function handleQueueList(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    const r = await client.queueList(cs.mcodeSessionId);
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      const r = await client.queueList(cs.mcodeSessionId);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, items: r?.items || [] }));
   } catch (e) {
@@ -307,7 +325,13 @@ export async function handleConfigOptions(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    const cwd = (cs.workspace && cs.workspace.dir) || undefined;
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      const cwd = (cs.workspace && cs.workspace.dir) || undefined;
     await client.loadSession(cs.mcodeSessionId, cwd);
     const configOptions = client.getSessionConfigOptions(cs.mcodeSessionId) || [];
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
@@ -344,7 +368,13 @@ export async function handleQueueUpdate(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    const r = await client.queueUpdate(cs.mcodeSessionId, itemId, text);
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      const r = await client.queueUpdate(cs.mcodeSessionId, itemId, text);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, item: r || null }));
   } catch (e) {
@@ -375,7 +405,13 @@ export async function handleQueueDelete(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    await client.queueDelete(cs.mcodeSessionId, itemId);
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      await client.queueDelete(cs.mcodeSessionId, itemId);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true }));
   } catch (e) {
@@ -406,7 +442,13 @@ export async function handleSteer(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    await client.steer(cs.mcodeSessionId, text);
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      await client.steer(cs.mcodeSessionId, text);
     // 记录 steer 事件到 cs (环形 buffer 20 条)
     const { broadcastSteered } = await import("../lib/state-bus.js");
     broadcastSteered(ctx.cid, {
@@ -444,7 +486,13 @@ export async function handleSetMode(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    await client.setMode(cs.mcodeSessionId, mode);
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      await client.setMode(cs.mcodeSessionId, mode);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, mode }));
   } catch (e) {
@@ -476,7 +524,13 @@ export async function handleSetConfigOption(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    await client.setConfigOption(cs.mcodeSessionId, key, value);
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      await client.setConfigOption(cs.mcodeSessionId, key, value);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, key, value }));
   } catch (e) {
@@ -499,7 +553,13 @@ async function withMcodeSession(cs, fn) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    return await fn(client);
+
+        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
+        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
+        if (cs.mcodeSessionId) {
+          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
+        }
+      return await fn(client);
   } finally {
     client.stop();
   }
