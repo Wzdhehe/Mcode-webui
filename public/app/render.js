@@ -7,6 +7,27 @@ import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTim
 import { setLeftOpen, setRightOpen, API_SUFFIX, sidebarReady, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, connect, es, getGeneralQuota, leftOpen, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
 import { SLASH_COMMANDS, SLASH_SKILLS, attachEvents, attachModalEvents, attachedFiles, attachmentList, autoResize, checkModals, fileInput, filterSlash, hideMode, hidePerm, hidePlan, hidePlanMode, hideSettings, hideSlash, isSending, lastShownPermKey, lastShownPlanKey, lastShownPlanModeKey, modeOpen, modePopover, moveSlash, permOpen, planModeOpen, planOpen, planSending, removeAttachment, renderAttachments, renderPerm, renderPlan, selectSlash, send, sendPermAnswer, sendPlanAnswer, sendPlanModeAnswer, setMode, settingsMenu, showPerm, showPlan, showPlanMode, showSlash, slashActiveIdx, slashFiltered, slashInput, slashOpen, slashOverlay, slashQuery, slashResults, stopExec, startAskCountdown, stopAskCountdown, toggleLang, toggleMode, toggleSettings, uploadFiles } from './events.js'
 
+// v1.0.1 round 8: when the server rotates the token (POST /api/settings
+// {resetToken: true}) it broadcasts an SSE event `auth.token_rotated`.
+// state.js#connect handles the event and dispatches a `webui:token_rotated`
+// CustomEvent on window. We listen here and tell the user (toast) that
+// the new token is available out-of-band (server stdout or
+// ~/.mcode-webui/settings.json) and they need to re-open the URL with
+// `?token=<new-value>`. We do NOT auto-update HEADERS — round 8 made
+// the new value impossible to obtain via HTTP/SSE, so the user must
+// perform the re-open step.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('webui:token_rotated', () => {
+    try {
+      const msg = (typeof t === 'function' && t('token_rotated_toast'))
+        || 'Token 已轮换 — 请从 server stdout 或 ~/.mcode-webui/settings.json 读取新 token，然后重新打开 URL（含 ?token=...）'
+      // showToast is a long-lived utility; default 2200ms is too short
+      // for an actionable message, bump to 8s.
+      showToast(msg, 8000)
+    } catch (e) { console.error('[webui] token rotated toast failed', e) }
+  })
+}
+
 // v0.5.ax: 欢迎页时隐藏右侧栏（chat-area 居中铺满）
 export function hideRightForWelcome(isWelcome) {
   const rp = document.getElementById('right-panel')
@@ -467,9 +488,16 @@ export function renderLanCardContent(s) {
       lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">— ${escapeHtml(t('lan_card_token_disabled') || 'Token 鉴权已关闭')}</span>`
     }
   } else if (!hasToken) {
-    // (b) After acknowledge (or no token on server) — show placeholder
+    // (b) Token not in /api/settings response — v1.0.1 round 8:
+    //   the server NO LONGER returns the token in HTTP responses
+    //   (closes the cross-origin bootstrap-token leak — see
+    //   SECURITY-NOTES §10). The user reads the token from
+    //   server stdout or ~/.mcode-webui/settings.json; the SPA only
+    //   needs to know that the token is "configured server-side" and
+    //   not display it. The placeholder text now points the user to
+    //   the two out-of-band delivery channels.
     if (lanCardTokenRow) {
-      lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">✓ ${escapeHtml(t('lan_card_token_saved') || '已保存')}</span>`
+      lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">✓ ${escapeHtml(t('lan_card_token_saved_v2') || '已保存 (stdout / ~/.mcode-webui/settings.json)')}</span>`
     }
   } else {
     // (a) Token available — make sure mask+value+buttons are rendered
@@ -488,6 +516,31 @@ export function renderLanCardContent(s) {
   // acknowledged 提示
   if (lanCardTokenWarning) lanCardTokenWarning.hidden = s.tokenAcknowledged !== false
   if (lanCardTokenAck) lanCardTokenAck.hidden = s.tokenAcknowledged !== false
+}
+
+// v2026-08-28 modacker: render the Token Plan (套餐用量) card.
+// Reflects server's `quotaEnabled` and the masked key preview. The
+// real key never leaves the server; this function only shows the
+// masked tail + a "set" / "not set" status line.
+export function renderQuotaCardContent(s) {
+  if (!s) return
+  const enabled = document.getElementById('quota-card-enabled')
+  const input = document.getElementById('quota-card-key-input')
+  const status = document.getElementById('quota-card-status')
+  if (enabled) enabled.checked = s.quotaEnabled === true
+  // Always clear the password input on render (don't keep typed-but-unsaved
+  // values around). Show a status line that indicates current server state.
+  if (input) input.value = ''
+  if (status) {
+    if (s.hasTokenPlanKey) {
+      const masked = s.tokenPlanApiKeyMasked || 'sk-cp-...'
+      status.textContent = `已保存 (${masked})`
+    } else if (s.quotaEnabled) {
+      status.textContent = '请填 Subscription Key'
+    } else {
+      status.textContent = '未启用'
+    }
+  }
 }
 
 // v0.5.bx-31: sidebar 首次 SSE 推 mcodeSessions 之前显示 skeleton, 避免点删除/切时 race
@@ -2218,3 +2271,4 @@ if (window.marked) {
 // ============================================================
 // Slash command overlay
 // ============================================================
+

@@ -16,6 +16,13 @@ import { join, dirname } from "node:path";
 import { _getBetterSqlite3Candidates } from "../server/lib/db.js";
 import { MCODE_CMD } from "../server/lib/config.js";
 
+// v1.1 (Windows CI): path.join yields `\` on win32, so exact-string
+// comparisons against POSIX-style expectations fail. Compare normalized
+// path SEGMENTS instead of raw strings.
+const normPath = (p) => p.split(/[\\/]+/).filter(Boolean).join("/");
+const hasCandidate = (candidates, expected) =>
+  candidates.some((c) => normPath(c) === normPath(expected));
+
 describe("db.js — better-sqlite3 resolver candidates (v1.0.1 round 4)", () => {
   let savedEnv;
 
@@ -94,15 +101,104 @@ describe("db.js — better-sqlite3 resolver candidates (v1.0.1 round 4)", () => 
     }
     delete process.env.MCODE_BETTER_SQLITE3;
     const candidates = _getBetterSqlite3Candidates();
-    // The MCODE_CMD-derived candidate starts with `dirname(MCODE_CMD)`,
-    // then `..`, then node_modules/... The candidate goes up 2 levels
-    // from MCODE_CMD itself (which points to the mcode binary file, not
-    // its parent dir) to reach npm's root node_modules.
-    const expectedPrefix = join(dirname(MCODE_CMD), "..");
+    // Round 5: the MCODE_CMD-derived candidate is `<dir-of-mcode-cmd>/node_modules/...`
+    // — `dirname(mcodeCmd)` then directly into the install dir's
+    // `node_modules/`. The previous round 4 form `MCODE_CMD/../../...`
+    // treated the executable file as a directory and went 3 levels
+    // above the install root, which is wrong.
+    const expectedPrefix = dirname(MCODE_CMD);
     const found = candidates.some((c) => c.startsWith(expectedPrefix));
     assert.ok(
       found,
       `expected at least one candidate starting with ${expectedPrefix} (MCODE_CMD="${MCODE_CMD}"), got: ${JSON.stringify(candidates)}`,
+    );
+    // And it must NOT be the round-4 bug shape — that form treated the
+    // executable file as a directory and went 2 levels up from its dir
+    // (`<dir>/../../node_modules/...`, 3 levels above the install root).
+    // The round-6 standard-home candidate legitimately shares the
+    // `<dirname(MCODE_CMD)>/..` prefix on some layouts, so assert on the
+    // exact buggy SHAPE rather than a loose prefix.
+    const buggyShape = join(
+      dirname(MCODE_CMD), "..", "..",
+      "node_modules", "@minimax-ai", "code", "node_modules", "better-sqlite3",
+    );
+    const buggyFound = candidates.some((c) => normPath(c) === normPath(buggyShape));
+    assert.equal(
+      buggyFound, false,
+      `candidates must not use the round-4 buggy shape ${buggyShape}`,
+    );
+  });
+
+  // Round 5: reproducible install-layout test that exercises the
+  // `mcodeCmd` parameter directly so we don't depend on whatever
+  // MCODE_CMD happens to resolve to in the test environment.
+  test("install-layout: mcode binary at <install>/mcode.cmd → candidate is <install>/node_modules/...", () => {
+    delete process.env.MCODE_BETTER_SQLITE3;
+    const fakeCmd = "/tmp/fake-mcode-install/mcode.cmd";
+    const expected = "/tmp/fake-mcode-install/node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    const candidates = _getBetterSqlite3Candidates({ mcodeCmd: fakeCmd });
+    assert.ok(
+      hasCandidate(candidates, expected),
+      `expected exact candidate ${expected} in ${JSON.stringify(candidates)}`,
+    );
+  });
+
+  test("install-layout: mcode binary at /usr/local/bin/mcode → candidate is /usr/local/bin/node_modules/...", () => {
+    // Simulates npm-global install: binary in /usr/local/bin/, deps
+    // expected to sit in the install dir's own node_modules.
+    delete process.env.MCODE_BETTER_SQLITE3;
+    const fakeCmd = "/usr/local/bin/mcode";
+    const expected = "/usr/local/bin/node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    const candidates = _getBetterSqlite3Candidates({ mcodeCmd: fakeCmd });
+    assert.ok(
+      hasCandidate(candidates, expected),
+      `expected exact candidate ${expected} in ${JSON.stringify(candidates)}`,
+    );
+  });
+
+  test("install-layout: MCODE_CMD = 'mcode' (PATH placeholder) does not produce a MCODE_CMD-derived candidate", () => {
+    delete process.env.MCODE_BETTER_SQLITE3;
+    const candidates = _getBetterSqlite3Candidates({ mcodeCmd: "mcode" });
+    // No candidate should be derived from the placeholder. Compare on
+    // normalized segments — on win32 the raw strings contain `\`, so a
+    // substring check against the POSIX tail would false-negative.
+    const TAIL = "node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    const cmdDerived = candidates.filter((c) => !normPath(c).endsWith(TAIL));
+    // Only the dev layout fallback should remain
+    assert.equal(
+      cmdDerived.length, 0,
+      `MCODE_CMD="mcode" should produce no MCODE_CMD-derived candidate, got: ${JSON.stringify(candidates)}`,
+    );
+  });
+
+  // Round 6: standard install location candidate (the one that
+  // actually fires on macOS dev boxes where ~/.minimax-code/lib/
+  // holds mcode's bundled deps).
+  test("install-layout: standard ~/.minimax-code/lib/node_modules/... is always tried", () => {
+    delete process.env.MCODE_BETTER_SQLITE3;
+    const candidates = _getBetterSqlite3Candidates({ home: "/Users/example" });
+    const expected = "/Users/example/.minimax-code/lib/node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    assert.ok(
+      hasCandidate(candidates, expected),
+      `expected standard install candidate ${expected} in ${JSON.stringify(candidates)}`,
+    );
+  });
+
+  test("install-layout: mcode at <root>/bin/mcode emits BOTH npm-style and flat candidates", () => {
+    delete process.env.MCODE_BETTER_SQLITE3;
+    const fakeCmd = "/opt/mcode/bin/mcode";
+    const candidates = _getBetterSqlite3Candidates({ mcodeCmd: fakeCmd });
+    // npm-style: <root>/lib/node_modules/...
+    const npmStyle = "/opt/mcode/lib/node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    // flat: <root>/node_modules/...
+    const flat = "/opt/mcode/bin/node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    assert.ok(
+      hasCandidate(candidates, npmStyle),
+      `expected npm-style candidate ${npmStyle} in ${JSON.stringify(candidates)}`,
+    );
+    assert.ok(
+      hasCandidate(candidates, flat),
+      `expected flat candidate ${flat} in ${JSON.stringify(candidates)}`,
     );
   });
 });

@@ -2,6 +2,7 @@
 // SQLite helpers — lazy require mcode's better-sqlite3 (so we don't break if missing).
 
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -30,21 +31,57 @@ let _McodeBetterSqlite3Failed = false;
 //
 // Exported (underscore prefix = test-only) so install-layout tests can
 // assert the candidate list without actually loading better-sqlite3.
-export function _getBetterSqlite3Candidates() {
+// `mcodeCmd` and `home` are parameterized so tests can simulate any
+// install layout without having to mutate module-level constants.
+export function _getBetterSqlite3Candidates({ mcodeCmd = MCODE_CMD, home = homedir() } = {}) {
   const candidates = [];
   if (process.env.MCODE_BETTER_SQLITE3) {
     candidates.push(process.env.MCODE_BETTER_SQLITE3);
   }
-  if (MCODE_CMD && MCODE_CMD !== "mcode") {
+  if (mcodeCmd && mcodeCmd !== "mcode") {
+    // mcodeCmd is the mcode executable file path (e.g.
+    // ~/.minimax-code/bin/mcode on macOS, or ~/.minimax-code/mcode.cmd
+    // on Windows, or /usr/local/bin/mcode for npm-global). The mcode
+    // package's node_modules/ lives in a sibling of the binary's dir,
+    // depending on the install layout:
+    //
+    //   • npm-style install (macOS default): binary at <root>/bin/mcode,
+    //     package at <root>/lib/, deps at <root>/lib/node_modules/...
+    //     → up 1 from the binary's dir, then down to "lib/node_modules/".
+    //   • flat install (some Linux): binary at <root>/mcode, package at
+    //     <root>/, deps at <root>/node_modules/...
+    //     → same dir as the binary.
+    //
+    // Round 4 used `MCODE_CMD/../../` which treated the executable
+    // file as a directory and went 3 levels above the install root.
+    // Round 5 picked one of the two layouts; round 6 emits BOTH so the
+    // candidate list works for either install style.
     candidates.push(
       join(
-        MCODE_CMD,
-        "..", "..",
+        dirname(mcodeCmd), "..", "lib",
+        "node_modules", "@minimax-ai", "code", "node_modules",
+        "better-sqlite3",
+      ),
+    );
+    candidates.push(
+      join(
+        dirname(mcodeCmd),
         "node_modules", "@minimax-ai", "code", "node_modules",
         "better-sqlite3",
       ),
     );
   }
+  // Standard install location: <home>/.minimax-code/lib/node_modules/...
+  // Emitted unconditionally so we work even when MCODE_CMD is the
+  // PATH-placeholder "mcode" (config.js can't find a mcode.cmd on
+  // macOS where the binary is just "mcode").
+  candidates.push(
+    join(
+      home, ".minimax-code", "lib",
+      "node_modules", "@minimax-ai", "code", "node_modules",
+      "better-sqlite3",
+    ),
+  );
   // Dev layout fallback — webui source tree at <mcode-root>/webui/server/lib/
   candidates.push(
     join(
@@ -125,10 +162,15 @@ export function deleteMcodeSessionFromDb(
 ) {
   if (!/^mvs_[a-f0-9]{32}$/.test(sid))
     return { ok: false, reason: "not_mcode_sid" };
-  const Db = getMcodeBetterSqlite3();
-  if (!Db) return { ok: false, reason: "better_sqlite3_not_loaded" };
+  // Check db path BEFORE loading better-sqlite3 so callers get the most
+  // specific failure first. Round 4 had these reversed: callers passing
+  // a missing MCODE_RUNTIME_DB got `better_sqlite3_not_loaded` even when
+  // the db path was the actual problem. lib-db.test.js already
+  // documents the expected order: `mcode_db_not_found` must win.
   if (!MCODE_RUNTIME_DB || !existsSync(MCODE_RUNTIME_DB))
     return { ok: false, reason: "mcode_db_not_found" };
+  const Db = getMcodeBetterSqlite3();
+  if (!Db) return { ok: false, reason: "better_sqlite3_not_loaded" };
 
   // dry-run path: open readonly, count rows per table, do NOT modify.
   // Satisfies mcode-plugin-guide red-lines.md §"写操作/破坏性操作":

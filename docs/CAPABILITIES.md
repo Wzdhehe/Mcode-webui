@@ -241,3 +241,4 @@ for the historical list and the response from the mcode team.
 - **旧 mcode 兼容**: 不考虑, 只适配 0.2.4。启动时检测 + fail-fast。
 - **Hook 范围**: 只观察 (用户决策), 不存 webui 自己的 hook 配置。
 - **进度文档**: `docs/PROGRESS.md` (用户新要求) 跟踪 Round 5/6/7/8。
+

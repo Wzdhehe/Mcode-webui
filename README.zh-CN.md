@@ -75,7 +75,8 @@ TOKEN=$(openssl rand -hex 16) node server.js
 |------|------|------|
 | `PORT` | `8080` | HTTP 端口（v1.0 之前是 `7890`） |
 | `HOST` | `0.0.0.0` | 绑定地址（`127.0.0.1` = 仅本机） |
-| `TOKEN` | （空） | 非本机请求必带的 token |
+| `TOKEN` | （空） | 非本机请求必带的 token。**v1.0.1**：不设的话，server 首次启动会自动生成 32 hex token（见下面的"Token 鉴权"段） |
+| `MCODE_WEBUI_SETTINGS_PATH` | `~/.mcode-webui/settings.json` | **v1.0.1**：覆盖 settings 文件位置（测试、非默认安装） |
 | `MCODE_MODEL` | `minimax_api/MiniMax-M3` | 默认模型 |
 | `MCODE_CMD` | 自动探测 | `mcode` / `mcode.cmd` 路径 |
 | `MCODE_WEBUI_UPLOAD_DIR` | 自动 | 附件目录 |
@@ -114,7 +115,7 @@ npm run package:plugin    # dist/Wzdhehe/mcode-webui/ + .zip
 ## 贡献
 
 见 [CONTRIBUTING.md](CONTRIBUTING.md)。`npm test`（382 通过 + 1 跳过）
-和 `npm run lint` 必须保持全绿；插件树（`plugins/.../Mcode-webui/`）
+和 `npm run lint` 必须保持全绿；插件树（`plugins/.../mcode-webui/`）
 的副本与仓库根保持同步。
 
 ## 开源协议
@@ -127,3 +128,4 @@ MIT —— 见 [LICENSE](plugins/Wzdhehe/mcode-webui/LICENSE)。
 它的 Web 界面后缀。所以 "Mcode CLI 的 webui" = "mcode 这个命令行
 工具的 Web 界面"，不是 "mcode 命令行版的 Web 工具"。两者方向
 相反。
+
