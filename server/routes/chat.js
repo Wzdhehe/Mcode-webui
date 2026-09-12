@@ -168,7 +168,12 @@ export async function handleStop(_req, res, ctx) {
       const client = new McodeAcpClient({ debug: false });
       try {
         await client.start();
-        await client.cancel(cs.mcodeSessionId);
+        // v1.1: mcode 0.3+ 没有 session/cancel — acp.mjs 内部回退到
+        // close + load；cwd 必须给对，否则 load 挂错工作区
+        await client.cancel(
+          cs.mcodeSessionId,
+          (cs.workspace && cs.workspace.dir) || undefined,
+        );
         cancelled = true;
         console.log(`[stop] session/cancel OK cid=${cid} mvsId=${cs.mcodeSessionId}`);
       } finally {
@@ -257,6 +262,58 @@ export async function handleQueue(req, res, ctx) {
     res.end(JSON.stringify({ ok: true, item: r || null }));
   } catch (e) {
     console.warn(`[chat.queue] cid=${ctx.cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
+}
+
+// GET /api/chat/queue — 队列清单 (mcode 0.3+; 0.2.x 无此面)
+//   0.4.2 实测: queue/goal/delegation 均无推送通知, 队列显示靠
+//   变更后主动 list (enqueue/update/delete/steer 后前端各刷一次)
+export async function handleQueueList(req, res, ctx) {
+  const cs = ctx.cs;
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "no active mcode session" }));
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    const r = await client.queueList(cs.mcodeSessionId);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, items: r?.items || [] }));
+  } catch (e) {
+    console.warn(`[chat.queueList] cid=${ctx.cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
+}
+
+// GET /api/chat/config-options — 模型/权限模式下拉数据源 (mcode 0.3+)
+//   来自 session/load 响应的 configOptions (select 控件: permissionMode / model)
+//   set 走 POST /api/chat/config-option (handleSetConfigOption 已有)
+export async function handleConfigOptions(req, res, ctx) {
+  const cs = ctx.cs;
+  if (!cs.mcodeSessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "no active mcode session" }));
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    const cwd = (cs.workspace && cs.workspace.dir) || undefined;
+    await client.loadSession(cs.mcodeSessionId, cwd);
+    const configOptions = client.getSessionConfigOptions(cs.mcodeSessionId) || [];
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, configOptions }));
+  } catch (e) {
+    console.warn(`[chat.configOptions] cid=${ctx.cid} error: ${e.message}`);
     res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: false, error: e.message }));
   } finally {

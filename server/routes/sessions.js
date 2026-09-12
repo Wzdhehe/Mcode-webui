@@ -406,7 +406,11 @@ export async function handleFork(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    const r = await client.fork(cs.mcodeSessionId, atMessageId);
+    const r = await client.fork(
+      cs.mcodeSessionId,
+      atMessageId,
+      workspace || undefined,
+    );
     // 失效 mcode sessions cache, 侧栏会自动显示新 fork
     invalidateMcodeSessionsCache(workspace);
     // 记录到 cs.mcodeForks (环形 buffer 5 条)
@@ -462,13 +466,71 @@ export async function handleResume(req, res, ctx) {
   const client = new McodeAcpClient({ debug: false });
   try {
     await client.start();
-    await client.resume(targetSid);
+    await client.resume(
+      targetSid,
+      (cs.workspace && cs.workspace.dir) || undefined,
+    );
     // 更新 cs (本地视图切到该 session)
     cs.mcodeSessionId = targetSid;
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, sessionId: targetSid }));
   } catch (e) {
     console.warn(`[sessions.resume] cid=${cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
+}
+
+// --- v1.1: mcode 0.3/0.4 session center (ACP 面) ---
+
+// POST /api/sessions/acp-activate — 激活一个 mcode session (session/activate)
+//   body: { sessionId }
+//   仅切换 mcode 侧的 current session 语义; webui 本地视图用 /api/sessions/switch
+export async function handleAcpActivate(req, res, ctx) {
+  const payload = await readJson(req);
+  const sessionId = payload.sessionId;
+  if (!sessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "sessionId required" }));
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    await client.activate(sessionId);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, sessionId }));
+  } catch (e) {
+    console.warn(`[sessions.acpActivate] cid=${ctx.cid} error: ${e.message}`);
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: e.message }));
+  } finally {
+    client.stop();
+  }
+}
+
+// POST /api/sessions/acp-close — 关闭 mcode session 的 ACP 视图
+//   body: { sessionId }
+//   turn 运行中调用 = 取消该 turn (prompt 以 stopReason:"cancelled" 返回)。
+//   会话本身保留在 session/list (mcode 没有 ACP 面的 delete/archive)。
+export async function handleAcpClose(req, res, ctx) {
+  const payload = await readJson(req);
+  const sessionId = payload.sessionId;
+  if (!sessionId) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: false, error: "sessionId required" }));
+  }
+  const { McodeAcpClient } = await import("../../acp.mjs");
+  const client = new McodeAcpClient({ debug: false });
+  try {
+    await client.start();
+    await client.closeSession(sessionId);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, sessionId }));
+  } catch (e) {
+    console.warn(`[sessions.acpClose] cid=${ctx.cid} error: ${e.message}`);
     res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: false, error: e.message }));
   } finally {

@@ -180,6 +180,17 @@ const ROUTES = [
     match: (p) => p === "/api/chat/config-option",
     handler: chatRoute.handleSetConfigOption,
   },
+  // v1.1: mcode 0.3+ queue snapshot + config options (无推送, 前端主动拉)
+  {
+    method: "GET",
+    match: (p) => p === "/api/chat/queue",
+    handler: chatRoute.handleQueueList,
+  },
+  {
+    method: "GET",
+    match: (p) => p === "/api/chat/config-options",
+    handler: chatRoute.handleConfigOptions,
+  },
 
   // v1.0.2: mcode 0.2.4 control surface — sessions endpoints
   {
@@ -213,6 +224,18 @@ const ROUTES = [
     method: "GET",
     match: (p) => p === "/api/chat/goal",
     handler: chatRoute.handleGoalGet,
+  },
+
+  // v1.1: mcode 0.3+ session center ACP 面 (activate/close; delete/search 无 ACP 面)
+  {
+    method: "POST",
+    match: (p) => p === "/api/sessions/acp-activate",
+    handler: sessionsRoute.handleAcpActivate,
+  },
+  {
+    method: "POST",
+    match: (p) => p === "/api/sessions/acp-close",
+    handler: sessionsRoute.handleAcpClose,
   },
 
   // Usage

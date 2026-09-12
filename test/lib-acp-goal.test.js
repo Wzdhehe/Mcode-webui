@@ -45,7 +45,7 @@ describe("v1.0.2 Round 6 fix: queue() 用 session/queue/enqueue", () => {
       return { item: { id: "q-1", text: params.text } };
     };
     await c.queue("mvs-1", "再查一下 Y");
-    assert.equal(captured.method, "session/queue/enqueue",
+    assert.equal(captured.method, "mcode/session/queue/enqueue",
       "v1.0.2 Round 5 误用 'session/queue', Round 6 修正");
     assert.equal(captured.params.sessionId, "mvs-1");
     assert.equal(captured.params.text, "再查一下 Y");
@@ -61,7 +61,7 @@ describe("v1.0.2 Round 6: McodeAcpClient session/goal RPC 包装", () => {
       return { goal: { id: "g-1", sessionId: params.sessionId, status: "active" } };
     };
     const r = await c.goalGet("mvs-1");
-    assert.equal(captured.method, "session/goal/get");
+    assert.equal(captured.method, "mcode/session/goal/get");
     assert.equal(captured.params.sessionId, "mvs-1");
     assert.equal(r.goal.id, "g-1");
     assert.equal(r.goal.status, "active");
@@ -75,7 +75,7 @@ describe("v1.0.2 Round 6: McodeAcpClient session/goal RPC 包装", () => {
       return { goal: { ...params, id: "g-new", status: "active" } };
     };
     const r = await c.goalCreate("mvs-1", "调研 mcode 0.2.4 控制面");
-    assert.equal(captured.method, "session/goal/create");
+    assert.equal(captured.method, "mcode/session/goal/create");
     assert.equal(captured.params.sessionId, "mvs-1");
     assert.equal(captured.params.objective, "调研 mcode 0.2.4 控制面");
     assert.equal("tokenBudget" in captured.params, false,
@@ -102,7 +102,7 @@ describe("v1.0.2 Round 6: McodeAcpClient session/goal RPC 包装", () => {
       return { goal: { ...params, id: "g-1" } };
     };
     await c.goalPatch("mvs-1", { status: "paused", objective: "新目标" });
-    assert.equal(captured.method, "session/goal/patch");
+    assert.equal(captured.method, "mcode/session/goal/patch");
     assert.equal(captured.params.sessionId, "mvs-1");
     assert.equal(captured.params.status, "paused");
     assert.equal(captured.params.objective, "新目标");
@@ -116,7 +116,7 @@ describe("v1.0.2 Round 6: McodeAcpClient session/goal RPC 包装", () => {
       return { cleared: true };
     };
     const r = await c.goalClear("mvs-1");
-    assert.equal(captured.method, "session/goal/clear");
+    assert.equal(captured.method, "mcode/session/goal/clear");
     assert.equal(captured.params.sessionId, "mvs-1");
     assert.equal(r.cleared, true);
   });

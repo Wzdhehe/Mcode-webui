@@ -62,8 +62,8 @@ function checkMcodeVersion() {
     if (!ok) {
       console.error('');
       console.error('==============================================================');
-      console.error(`  webui v1.0.2 requires mcode >= 0.2.4`);
-      console.error(`  webui v1.0.2 需要 mcode >= 0.2.4`);
+      console.error(`  webui v1.1 requires mcode >= 0.2.4 (0.3.x / 0.4.x supported)`);
+      console.error(`  webui v1.1 需要 mcode >= 0.2.4（已适配 0.3.x / 0.4.x）`);
       console.error(`  current / 当前版本: mcode ${version}`);
       console.error(`  upgrade / 升级: npm i -g @minimax-ai/code@latest`);
       console.error('==============================================================');
