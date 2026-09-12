@@ -1941,9 +1941,8 @@ export async function queueCurrentMessage() {
     if (j.ok) {
       textarea.value = ''
       autoResize()
-      if (typeof showToast === 'function') showToast(t('queue_button'))
-      // v1.1: 0.3+ 无 queue_update 推送 — 变更后主动拉取队列
-      await refreshQueueList()
+      if (typeof showToast === 'function') showToast(t('queue_queued'))
+      // v1.1.1: 徽标数据源已改为服务端台账（SSE 推送），无需 client 端拉取
     } else {
       if (typeof showToast === 'function') showToast(j.error || 'queue failed')
     }

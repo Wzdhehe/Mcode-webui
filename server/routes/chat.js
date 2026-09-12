@@ -48,7 +48,7 @@ export async function handleSend(req, res, ctx) {
     //   切 session 不算发消息,所以切 session 时不写 (在 routes/sessions.js handleSwitchSession 已删)
     //   ask_user 答案不算发消息,也不写
     cs.lastUsedWorkspace = (cs.workspace && cs.workspace.dir) || null;
-    pushStateFor(cid);
+    pushStateFor(ctx.cid);
     persistCurrentChat(cs);
   }
 
@@ -76,6 +76,56 @@ export async function handleSend(req, res, ctx) {
       // fall through to mcode call
     } else {
       return;
+    }
+  }
+
+  // v1.1.1: turn 运行中直接 session/prompt 会被 0.4.2 runtime 拒绝
+  //   ("Session already has an active Turn. Use queue send to deliver the
+  //   message after it.") — TUI 语义是运行中发消息自动排队, webui 同样处理:
+  //   转入 queue (enqueue), 队列徽标经 cs.mcodeQueue + pushStateFor 亮起。
+  //   enqueue 失败 (如 0.2.x 无此 RPC) 则照旧走 prompt, 让错误如实暴露。
+  //   目标 session 取 cs.running.sessionId (prompt 开始即记录) 兜底
+  //   cs.mcodeSessionId (session/new 一返回即赋值, 见 mcode-acp.js)。
+  if (!isAskAnswer && cs.running && cs.running.active) {
+    const runningSid = cs.running.sessionId || cs.mcodeSessionId;
+    // session/new 尚未完成时（首个 turn 的前几秒）短暂等待 sid 就绪
+    let waitSid = runningSid;
+    if (!waitSid) {
+      for (let i = 0; i < 20 && !waitSid; i++) {
+        await new Promise((r) => setTimeout(r, 400));
+        waitSid = (cs.running && cs.running.sessionId) || cs.mcodeSessionId;
+      }
+    }
+    if (waitSid) {
+      const { McodeAcpClient } = await import("../../acp.mjs");
+      const client = new McodeAcpClient({ debug: false });
+      let queuedOk = false;
+      try {
+        await client.start();
+        await Promise.resolve(
+          client.loadSession?.(waitSid, (cs.workspace && cs.workspace.dir) || undefined),
+        ).catch(() => {});
+        const q = await client.queue(waitSid, content);
+        queuedOk = true;
+        // v1.1.1: 服务端台账记账（queue/list 在投递后为空, 不能做徽标数据源）
+        if (q && (q.itemId || q.id)) {
+          cs.mcodeQueue = [
+            ...(cs.mcodeQueue || []),
+            { itemId: q.itemId || q.id, text: content, createdAt: Date.now() },
+          ];
+        } else {
+          cs.mcodeQueue = [...(cs.mcodeQueue || []), { text: content, createdAt: Date.now() }];
+        }
+        pushStateFor(ctx.cid);
+        console.log(
+          `[send] turn running → auto-queued cid=${cid} sid=${waitSid} itemId=${(q && (q.itemId || q.id)) || "?"}`,
+        );
+      } catch (e) {
+        console.warn(`[send] auto-queue failed cid=${cid}: ${e.message} — falling through to prompt`);
+      } finally {
+        client.stop();
+      }
+      if (queuedOk) return;
     }
   }
 
@@ -270,6 +320,16 @@ export async function handleQueue(req, res, ctx) {
           await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
         }
       const r = await client.queue(cs.mcodeSessionId, text);
+    // v1.1.1: 0.4.2 的 queue 是"当前 turn 结束后自动投递"语义, enqueue 后
+    // queue/list 立即变空 — 队列徽标的数据源改用服务端台账 (finalize 时
+    // 用 queue/list 对账清零), 不依赖 client 端的 refreshQueueList
+    if (r && (r.itemId || r.id)) {
+      cs.mcodeQueue = [
+        ...(cs.mcodeQueue || []),
+        { itemId: r.itemId || r.id, text, createdAt: Date.now() },
+      ];
+      pushStateFor(ctx.cid);
+    }
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, item: r || null }));
   } catch (e) {
@@ -281,40 +341,20 @@ export async function handleQueue(req, res, ctx) {
   }
 }
 
-// GET /api/chat/queue — 队列清单 (mcode 0.3+; 0.2.x 无此面)
-//   0.4.2 实测: queue/goal/delegation 均无推送通知, 队列显示靠
-//   变更后主动 list (enqueue/update/delete/steer 后前端各刷一次)
+// GET /api/chat/queue — 队列快照
+//   v1.1.1: 数据源为服务端台账 cs.mcodeQueue（0.4.2 的 queue/list 在条目
+//   入队后即进入投递管线返回 []，不能做徽标数据源；台账也免去每次拉取
+//   新起 acp 进程的开销）
 export async function handleQueueList(req, res, ctx) {
   const cs = ctx.cs;
   if (!cs.mcodeSessionId) {
     res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
     return res.end(JSON.stringify({ ok: false, error: "no active mcode session" }));
   }
-  const { McodeAcpClient } = await import("../../acp.mjs");
-  const client = new McodeAcpClient({ debug: false });
-  try {
-    await client.start();
-
-        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
-        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
-        if (cs.mcodeSessionId) {
-          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
-        }
-      const r = await client.queueList(cs.mcodeSessionId);
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, items: r?.items || [] }));
-  } catch (e) {
-    console.warn(`[chat.queueList] cid=${ctx.cid} error: ${e.message}`);
-    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: false, error: e.message }));
-  } finally {
-    client.stop();
-  }
+  res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify({ ok: true, items: cs.mcodeQueue || [] }));
 }
 
-// GET /api/chat/config-options — 模型/权限模式下拉数据源 (mcode 0.3+)
-//   来自 session/load 响应的 configOptions (select 控件: permissionMode / model)
-//   set 走 POST /api/chat/config-option (handleSetConfigOption 已有)
 export async function handleConfigOptions(req, res, ctx) {
   const cs = ctx.cs;
   if (!cs.mcodeSessionId) {
@@ -375,6 +415,11 @@ export async function handleQueueUpdate(req, res, ctx) {
           await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
         }
       const r = await client.queueUpdate(cs.mcodeSessionId, itemId, text);
+    // v1.1.1: 服务端台账同步改写 + 推送
+    cs.mcodeQueue = (cs.mcodeQueue || []).map((it) =>
+      it.itemId === itemId ? { ...it, text } : it,
+    );
+    pushStateFor(ctx.cid);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true, item: r || null }));
   } catch (e) {
@@ -412,6 +457,9 @@ export async function handleQueueDelete(req, res, ctx) {
           await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
         }
       await client.queueDelete(cs.mcodeSessionId, itemId);
+    // v1.1.1: 服务端台账同步移除 + 推送（徽标即时减少）
+    cs.mcodeQueue = (cs.mcodeQueue || []).filter((it) => it.itemId !== itemId);
+    pushStateFor(ctx.cid);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true }));
   } catch (e) {
@@ -427,7 +475,13 @@ export async function handleQueueDelete(req, res, ctx) {
 export async function handleSteer(req, res, ctx) {
   const cs = ctx.cs;
   const payload = await readJson(req);
-  const text = (payload.text || "").trim();
+  const itemId = payload.itemId;
+  let text = (payload.text || "").trim();
+  // v1.1.1: 队列条目引导 — itemId 来源时从台账取文案，消费后移除
+  if (!text && itemId) {
+    const item = (cs.mcodeQueue || []).find((it) => it.itemId === itemId);
+    text = ((item && item.text) || "").trim();
+  }
   if (!text) {
     res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
     return res.end(JSON.stringify({ ok: false, error: "text required" }));
@@ -453,10 +507,14 @@ export async function handleSteer(req, res, ctx) {
     const { broadcastSteered } = await import("../lib/state-bus.js");
     broadcastSteered(ctx.cid, {
       itemId: `steer-${Date.now()}`,
-      originalText: "(current turn)",
+      originalText: itemId ? (cs.mcodeQueue || []).find((it) => it.itemId === itemId)?.text || "(queued item)" : "(current turn)",
       steeredText: text,
       at: Date.now(),
     });
+    if (itemId) {
+      cs.mcodeQueue = (cs.mcodeQueue || []).filter((it) => it.itemId !== itemId);
+      pushStateFor(ctx.cid);
+    }
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true }));
   } catch (e) {

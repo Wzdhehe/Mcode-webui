@@ -92,16 +92,17 @@ describe("v1.1: GET /api/chat/queue (handleQueueList)", () => {
     assert.match(res._body.error, /no active mcode session/);
   });
 
-  test("调 acp.queueList → 返回 items", async () => {
+  test("返回服务端台账 cs.mcodeQueue (queue/list 在 0.4.2 投递后为空, 不能做数据源)", async () => {
     const cs = getClient("test-v11-ql-2");
     cs.mcodeSessionId = "mvs-ql-2";
+    cs.mcodeQueue = [{ itemId: "q-ledger-1", text: "台账排队内容", createdAt: Date.now() }];
     const res = fakeRes();
     await handleQueueList(fakeReq(), res, { cid: "test-v11-ql-2", cs });
     assert.equal(res._status, 200);
     assert.equal(res._body.ok, true);
     assert.equal(res._body.items.length, 1);
-    assert.equal(res._body.items[0].itemId, "q-9");
-    assert.equal(res._body.items[0].text, "排队内容");
+    assert.equal(res._body.items[0].itemId, "q-ledger-1");
+    assert.equal(res._body.items[0].text, "台账排队内容");
   });
 });
 

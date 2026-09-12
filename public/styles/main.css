@@ -3349,18 +3349,25 @@ body.is-remote .btn-lan-toggle { display: none; }
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  background: var(--accent-soft, #e8f0fe);
-  color: var(--accent, #1a73e8);
-  border: 1px solid var(--accent, #1a73e8);
+  /* v1.1.1: 用主题语义变量（浅色=墨/纸, 深色=纸/墨）— 之前 --accent-soft
+     在本主题未定义走蓝色 fallback, hover 用 --accent-hover(浅色=#000) 且
+     不改文字色 → 黑底黑字 */
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  border: 1px solid var(--border-light);
   border-radius: 12px;
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
-.queue-badge:hover { background: var(--accent-hover, #d2e3fc); }
+.queue-badge:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
 .queue-badge-count {
-  background: var(--accent, #1a73e8);
-  color: white;
+  background: var(--accent);
+  color: var(--on-accent);
   border-radius: 8px;
   padding: 0 6px;
   font-size: 11px;

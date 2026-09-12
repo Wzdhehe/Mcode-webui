@@ -53,6 +53,15 @@ export async function runMcodeAcp(content, opts = {}) {
   }
   const client = new McodeAcpClient({ debug: false });
   let sid = existingSid;
+  // v1.1.1: 提前点亮 running 标志 — client.start() 需 5-8s（mcode acp 冷
+  // 启动），之前 running.active 要到 start 完成后才置位，这段盲区里并发
+  // send 会绕过自动排队、各自开新 mcode session。finalize 统一复位。
+  if (cs && cs.running) {
+    cs.running.active = true;
+    cs.running.sessionId = existingSid || null;
+    cs.running.startedAt = Date.now();
+    pushStateFor(cid);
+  }
   try {
     await client.start();
     if (sid) {
@@ -68,6 +77,14 @@ export async function runMcodeAcp(content, opts = {}) {
     if (!sid) {
       const r = await client.newSession(workspace);
       sid = r.sessionId;
+      // v1.1.1: session/new 一返回就把 mcodeSessionId 挂到 cs 并推送 —
+      // 之前只在 prompt finalize 时赋值 (下方 r.sessionId 处), 整个运行
+      // 期间并发 send 看到的 cs.mcodeSessionId 都是 null → 每条消息各自
+      // 开新 mcode session, 运行中自动排队也无从谈起
+      if (sid && cs) {
+        cs.mcodeSessionId = sid;
+        pushStateFor(cid);
+      }
     }
     return await streamAcpPrompt(client, sid, content, label, cs, cid);
   } catch (e) {
@@ -100,6 +117,17 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
       tps: null,
     };
     const t0 = Date.now();
+    // v1.1.1: 流式节流推送 — thought/message chunk 更新 cs.chat 后必须推
+    // 状态, 否则客户端只能等 finalize 才看到正文（用户实测: 正文不流式）。
+    // 300ms 节流: 长回复 chunk 很密, 逐 chunk push 会打爆 SSE。
+    let lastStreamPush = 0;
+    const throttledStreamPush = (force = false) => {
+      const now = Date.now();
+      if (force || now - lastStreamPush >= 300) {
+        lastStreamPush = now;
+        pushStateFor(cid);
+      }
+    };
     cs.running = {
       active: true,
       prompt: label,
@@ -149,6 +177,27 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
             ? line.slice(0, -2)
             : line,
         );
+      }
+      // v1.1.1: turn 结束 = mcode 自动投递排队中的消息 → 对账清零。
+      // (0.4.2 无 queue_update 推送, queue/list 在投递后返回 []; 不清的话
+      //  cs.mcodeQueue 残留, 客户端队列徽标永远亮着)
+      if (Array.isArray(cs.mcodeQueue) && cs.mcodeQueue.length && cs.mcodeSessionId) {
+        const qSid = cs.mcodeSessionId;
+        const qWorkspace = (cs.workspace && cs.workspace.dir) || undefined;
+        (async () => {
+          try {
+            const qc = new McodeAcpClient({ debug: false });
+            try {
+              await qc.start();
+              await Promise.resolve(qc.loadSession?.(qSid, qWorkspace)).catch(() => {});
+              const ql = await qc.queueList(qSid);
+              cs.mcodeQueue = (ql && ql.items) || [];
+              pushStateFor(cid);
+            } finally {
+              qc.stop();
+            }
+          } catch {}
+        })();
       }
       if (r.usage) {
         cs.context.tokens =
@@ -320,10 +369,12 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
           r.thinking = (r.thinking || "") + c.text;
           const oneLine = r.thinking.replace(/\n+/g, " ").trim();
           streamUpdateLine(cs.chat, "▲", oneLine);
+          throttledStreamPush();
         } else if (c.kind === "message" && typeof c.text === "string") {
           r.answer = (r.answer || "") + c.text;
           const oneLine = r.answer.replace(/\n+/g, " ").trim();
           streamUpdateLine(cs.chat, "●", oneLine);
+          throttledStreamPush();
         } else if (c.kind === "tool_call" && c.update) {
           // v0.5.bs: 工具调用开始 — 写 `→ toolName` 行到 chat
           const u = c.update;
