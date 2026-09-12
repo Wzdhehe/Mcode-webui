@@ -517,6 +517,45 @@ export function attachEvents() {
   async function loadModelList() {
     if (!modelPickerList) return
     modelPickerList.innerHTML = '<div class="model-picker-loading">' + t('model_picker_loading') + '</div>'
+    // v1.1: 优先用 0.3+ 的 session configOptions (probe 实测: 这是模型
+    // 切换的标准面 — 真实时值 + 当前选中标记 + BYOK 渠道一并出现)
+    try {
+      const cr = await fetch('/api/chat/config-options' + API_SUFFIX, { headers: HEADERS })
+      const cd = await cr.json().catch(() => ({}))
+      if (cd.ok && Array.isArray(cd.configOptions)) {
+        const modelOpt = cd.configOptions.find((o) => o && o.id === 'model')
+        if (modelOpt && Array.isArray(modelOpt.options) && modelOpt.options.length > 0) {
+          const current = modelOpt.currentValue || ''
+          modelPickerList.innerHTML = modelOpt.options.map((o) => {
+            const isCurrent = o.value === current
+            return '<button class="model-picker-item-btn' + (isCurrent ? ' current' : '') + '" data-model-id="' + (o.value || '').replace(/"/g, '&quot;') + '">' +
+                   '<span>' + (o.name || o.value) + '</span>' +
+                   '<span class="provider">' + t('model_picker_acp_source') + '</span>' +
+                   '</button>'
+          }).join('')
+          modelPickerList.querySelectorAll('.model-picker-item-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+              const id = btn.getAttribute('data-model-id') || ''
+              modelPicker.hidden = true
+              try {
+                // 走 set_config_option (acp.mjs 兼容 0.2.x {key,value} 形状)
+                await fetch('/api/chat/config-option' + API_SUFFIX, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', ...HEADERS },
+                  body: JSON.stringify({ key: 'model', value: id }),
+                })
+                const r = await fetch('/api/state' + API_SUFFIX, { headers: HEADERS })
+                if (r.ok) { setState(await r.json()); render() }
+                showToast && showToast(t('model_switched') + ' ' + id, 1500)
+              } catch (e) { console.error('[set-config-model]', e) }
+            })
+          })
+          return
+        }
+      }
+    } catch (e) {
+      console.warn('[models] config-options unavailable, falling back to /api/models', e)
+    }
     try {
       const r = await fetch('/api/models' + API_SUFFIX, { headers: HEADERS })
       const d = await r.json()
@@ -550,7 +589,7 @@ export function attachEvents() {
             // 服务端 pushStateFor 自动更新 state，render() 会被 SSE 推过来触发
             // 但保险起见主动 fetch 一次
             const r = await fetch('/api/state' + API_SUFFIX, { headers: HEADERS })
-            if (r.ok) { state = await r.json(); render() }
+            if (r.ok) { setState(await r.json()); render() }
             showToast && showToast(t('model_switched') + ' ' + id, 1500)
           } catch (e) { console.error('[set-model]', e) }
         })
@@ -1903,6 +1942,8 @@ export async function queueCurrentMessage() {
       textarea.value = ''
       autoResize()
       if (typeof showToast === 'function') showToast(t('queue_button'))
+      // v1.1: 0.3+ 无 queue_update 推送 — 变更后主动拉取队列
+      await refreshQueueList()
     } else {
       if (typeof showToast === 'function') showToast(j.error || 'queue failed')
     }
@@ -1923,6 +1964,8 @@ export async function queueUpdateItem(itemId, newText) {
     const j = await r.json().catch(() => ({}))
     if (!j.ok && typeof showToast === 'function') {
       showToast(j.error || 'queue update failed')
+    } else {
+      await refreshQueueList()
     }
   } catch (e) {
     if (typeof showToast === 'function') showToast('queue update error: ' + e.message)
@@ -1941,9 +1984,47 @@ export async function queueDeleteItem(itemId) {
     const j = await r.json().catch(() => ({}))
     if (!j.ok && typeof showToast === 'function') {
       showToast(j.error || 'queue delete failed')
+    } else {
+      await refreshQueueList()
     }
   } catch (e) {
     if (typeof showToast === 'function') showToast('queue delete error: ' + e.message)
+  }
+}
+
+// 队列项触发 steer (v1.1: queue-list 面板按钮)
+export async function queueSteerItem(itemId) {
+  if (!itemId) return
+  try {
+    const r = await fetch('/api/chat/queue/steer' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ itemId }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (j.ok) {
+      if (typeof showToast === 'function') showToast(t('steer_notice'))
+    } else {
+      if (typeof showToast === 'function') showToast(j.error || 'steer failed')
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('steer error: ' + e.message)
+  }
+}
+
+// v1.1: mcode 0.3+ 不推 queue_update 通知 (probe 实测) — 队列徽标/清单
+// 的数据源改为「变更后主动拉取」: queue/update/delete/steer 成功后、
+// 以及展开队列清单时调用
+export async function refreshQueueList() {
+  try {
+    const r = await fetch('/api/chat/queue' + API_SUFFIX, { headers: HEADERS })
+    const j = await r.json().catch(() => ({}))
+    if (j.ok) {
+      state.mcodeQueue = j.items || []
+      render()
+    }
+  } catch (e) {
+    console.warn('[queue] refresh failed', e)
   }
 }
 
@@ -2067,7 +2148,12 @@ export function attachControlSurface() {
     queueBadge.addEventListener('click', (e) => {
       e.preventDefault()
       const list = document.getElementById('queue-list')
-      if (list) list.hidden = !list.hidden
+      if (list) {
+        const opening = list.hidden
+        list.hidden = !list.hidden
+        // v1.1: 展开时拉一次最新队列 (0.3+ 无推送)
+        if (opening) refreshQueueList()
+      }
     })
   }
   // v1.0.2: 顶栏 Steer 按钮 (LLM 响应中可见)

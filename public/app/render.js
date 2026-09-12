@@ -5,7 +5,7 @@
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
 import { setLeftOpen, setRightOpen, API_SUFFIX, sidebarReady, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, connect, es, getGeneralQuota, leftOpen, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
-import { SLASH_COMMANDS, SLASH_SKILLS, attachEvents, attachModalEvents, attachedFiles, attachmentList, autoResize, checkModals, fileInput, filterSlash, hideMode, hidePerm, hidePlan, hidePlanMode, hideSettings, hideSlash, isSending, lastShownPermKey, lastShownPlanKey, lastShownPlanModeKey, modeOpen, modePopover, moveSlash, permOpen, planModeOpen, planOpen, planSending, removeAttachment, renderAttachments, renderPerm, renderPlan, selectSlash, send, sendPermAnswer, sendPlanAnswer, sendPlanModeAnswer, setMode, settingsMenu, showPerm, showPlan, showPlanMode, showSlash, slashActiveIdx, slashFiltered, slashInput, slashOpen, slashOverlay, slashQuery, slashResults, stopExec, startAskCountdown, stopAskCountdown, toggleLang, toggleMode, toggleSettings, uploadFiles } from './events.js'
+import { SLASH_COMMANDS, SLASH_SKILLS, attachEvents, attachModalEvents, attachedFiles, attachmentList, autoResize, checkModals, fileInput, filterSlash, hideMode, hidePerm, hidePlan, hidePlanMode, hideSettings, hideSlash, isSending, lastShownPermKey, lastShownPlanKey, lastShownPlanModeKey, modeOpen, modePopover, moveSlash, permOpen, planModeOpen, planOpen, planSending, queueDeleteItem, queueSteerItem, removeAttachment, renderAttachments, renderPerm, renderPlan, selectSlash, send, sendPermAnswer, sendPlanAnswer, sendPlanModeAnswer, setMode, settingsMenu, showPerm, showPlan, showPlanMode, showSlash, slashActiveIdx, slashFiltered, slashInput, slashOpen, slashOverlay, slashQuery, slashResults, stopExec, startAskCountdown, stopAskCountdown, toggleLang, toggleMode, toggleSettings, uploadFiles } from './events.js'
 
 // v1.0.1 round 8: when the server rotates the token (POST /api/settings
 // {resetToken: true}) it broadcasts an SSE event `auth.token_rotated`.
@@ -200,6 +200,9 @@ export function render() {
   // Sessions list (左栏 RECENT)
   renderSessions()
 
+  // v1.1: 队列徽标 + 队列清单 (R5 建好 DOM/CSS, v1.1 接上数据源)
+  renderQueue()
+
   // Quota card (左下角, btn-menu 风格 + popover, mmx 直拉 + 本机时间)
   renderUsage()
 
@@ -208,6 +211,44 @@ export function render() {
 
   // Modals (v0.4.0)
   checkModals()
+}
+
+// v1.1: 队列徽标 + 队列清单 — R5 建好 DOM/CSS 但一直没有渲染函数。
+// 数据源 state.mcodeQueue: 0.2.x 来自 queue_update 推送; 0.3+ 无推送
+// (probe 实测), 由 events.js refreshQueueList() 在变更后主动拉取。
+export function renderQueue() {
+  const wrap = document.getElementById('queue-badge-wrap')
+  const badgeCount = document.getElementById('queue-badge-count')
+  const listItems = document.getElementById('queue-list-items')
+  const listEmpty = document.getElementById('queue-list-empty')
+  if (!wrap || !badgeCount || !listItems || !listEmpty) return
+  const items = Array.isArray(state?.mcodeQueue) ? state.mcodeQueue : []
+  wrap.hidden = items.length === 0
+  badgeCount.textContent = String(items.length)
+  listEmpty.hidden = items.length > 0
+  listItems.innerHTML = items.map((it) => {
+    const id = String(it.itemId || it.id || '').replace(/"/g, '&quot;')
+    const text = String(it.text || it.content || '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    if (!id) return ''
+    return '<div class="queue-item" data-item-id="' + id + '">' +
+      '<span class="queue-item-text">' + text + '</span>' +
+      '<span class="queue-item-actions">' +
+      '<button class="queue-item-btn" data-act="steer">' + t('queue_steer') + '</button>' +
+      '<button class="queue-item-btn" data-act="delete">' + t('queue_delete') + '</button>' +
+      '</span></div>'
+  }).join('')
+  listItems.querySelectorAll('.queue-item-btn').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation()
+      const itemEl = btn.closest('.queue-item')
+      const itemId = itemEl?.getAttribute('data-item-id')
+      if (!itemId) return
+      const act = btn.getAttribute('data-act')
+      if (act === 'delete') await queueDeleteItem(itemId)
+      if (act === 'steer') await queueSteerItem(itemId)
+    })
+  })
 }
 
 export function renderRight() {
