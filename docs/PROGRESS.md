@@ -4,7 +4,7 @@
 > 上游 mcode TUI: https://github.com/MiniMax-AI/MiniMax-Code (CHANGELOG.md)
 > 下游 webui: 本仓库
 
-**最后更新**: 2026-08-26 (Round 6 完成, 累计 R5+R6 10 commit 落地待 push)
+**最后更新**: 2026-09-12 (v1.1.0 — mcode 0.3/0.4 适配完成, live smoke 11/11)
 
 ---
 
@@ -12,110 +12,82 @@
 
 ### Round 1-4 — v1.0.1 LAN access security controls (PR #16 base)
 
-- v1.0.1 baseline: 8 个 commit → `19bb851` (fork)
-- Round 2 (`564af66`): CORS preflight exemption + cross-origin Authorization
-- Round 3 (`3009c26`): auth.js setters sync + server-startup smoke test + doc audit
-- Round 4 (`99dd587`): db.js better-sqlite3 path resolver for non-canonical layouts
-- 测试: 387 pass / 0 fail / 1 skipped
-- 文档: CHANGELOG / README / CAPABILITIES / SECURITY-NOTES / SKILL 全部同步
-- PR #16: state=OPEN, reviewDecision=CHANGES_REQUESTED (待 reviewer re-review)
+- Round 2: CORS preflight exemption + cross-origin Authorization
+- Round 3: auth.js setters sync + server-startup smoke test + doc audit
+- Round 4: db.js better-sqlite3 path resolver for non-canonical layouts
 
-### Round 5 — v1.0.2 mcode 0.2.4 control surface 基础 (本次)
+### Round 5 — v1.0.2 mcode 0.2.4 control surface 基础
 
-- ✅ acp.mjs: 加 10 个 RPC 包装 + 4 个 sessionUpdate 枚举
-- ✅ state-bus.js: 加 6 个 cs 字段 + 6 个 broadcast
-- ✅ mcode-acp.js: 加 4 个事件透传 + Goal 新/旧 shape 双兼容
-- ✅ routes/chat.js: 加 6 个 handler (queue/update/delete/steer/mode/config-option)
-- ✅ routes/sessions.js: 加 2 个 handler (fork/resume)
-- ✅ router.js: 加 8 条新路由分发
-- ✅ server.js: 启动 mcode 版本检查 (>= 0.2.4 fail-fast)
-- ✅ client: events.js 加 9 个 handler + attachControlSurface
-- ✅ client: i18n.js 加 25 条双语 key
-- ✅ client: index.html 加 queue-badge + btn-steer DOM 节点
-- ✅ client: main.css 加 queue-badge / btn-steer / 恢复 btn-mode 样式
-- ✅ 23 个新单测 (state-bus 7 / routes 9 / acp RPC 4 / version check 3)
-- ✅ 26 条双语 i18n key (fork/queue/steer/cancel/resume/mode/btn-plus/runtime)
-- ✅ Lint 0 warning
-- ✅ 测试 410 pass / 0 fail / 1 skipped
-- ✅ 文档: CHANGELOG v1.0.2 + CAPABILITIES §14 + PROGRESS.md (本文件)
-- ✅ 3 commit (3f124e7 feat / e0744df docs / c973f5e mirror) 落地
-- ✅ 独立 verifier 2-axis audit (dispatched mavis subagent)
-- ✅ 修审计发现: C1 handleStop 改用 McodeAcpClient / C2 mirror PROGRESS 同步 / I1 mcode-acp 调 broadcast / I2 btn-send stop 行为恢复 + btn-queue 独立入口 / I3 §14.1 标题 5→10 / I4 mcode-rpc UNSUPPORTED 清理 / M3 补 2 个新 test / M1+M2 PROGRESS 数字
-- ⏳ **不 push** (等用户说"推", 推后会触发 PR #16 自动更新)
+- acp.mjs: 10 个 RPC 包装 + 4 个 sessionUpdate 枚举; state-bus: goal/queue
+  cs 字段 + broadcast; routes/chat.js 6 handler; routes/sessions.js fork/resume;
+  客户端 queue-badge / btn-steer / btn-mode 接通 0.2.4 set_mode
+
+### Round 6 — v1.0.3 mcode 0.2.4 Goal + 审计修复 (2026-08-26)
+
+- acp.mjs: session/goal 4 RPC + queue() 方法名修正
+- state-bus GOAL_STATUSES (5 状态) + 4 个 goal endpoint
+- 客户端 Goal budget bar + Delegation card + Ask 30s 倒计时
+- R6 audit 修复 (C2 XSS + I1 sendAskAnswer type 等)
+- ⏳ R6 独立 verifier audit 一直未派 (遗留)
+
+### R7 — v1.1.0 mcode 0.3/0.4 适配 + 布局收敛 (2026-09-12, 本次)
+
+- **布局收敛**: 删除 `plugins/Wzdhehe/mcode-webui/` 手工镜像, repo root
+  即插件源; package-plugin 从 root 打包, validate 校验 dist 产物
+- **round 5–8 并入主树**: 把 modacker 在官方 PR 线的 round 5–8
+  (better-sqlite3 resolver / Token Plan / CORS per-origin / 跨域
+  token 泄露修复 + csrf-token-disclosure 测试) 从镜像移植到 root,
+  与 R5/R6 功能语义合并
+- **0.4.2 ACP probe** (`docs/acp-probe-0.4.md`, 4 轮): 扩展面迁到
+  `mcode/session/*` 命名空间; `session/cancel` 移除 (close 替代);
+  `set_mode` 参数 modeId; resume/fork 需要 cwd; usage 只在
+  `usage_update` 通知; `set_config_option` 是模型/权限切换的标准面;
+  queue/goal/delegation 无推送通知; 0.4.2 会话是**进程域**的
+- **acp.mjs 兼容层**: extRequest() 新名优先 + 0.2.x 裸名回退;
+  cancel() close+load 回退; modeId/configId 参数回退链;
+  queueList/activate/closeSession 新包装; request_permission 自动应答
+  (cancelled) + serverRequest 事件; mcode/session/*_update 通知归一化;
+  usage 从 usage_update 累计
+- **服务端**: +4 路由 (GET queue / GET config-options / POST
+  acp-activate / POST acp-close); 所有 fresh-client 路由 load-first
+  (进程域会话必须先挂载); fork/resume/stop 传 workspace cwd
+- **前端**: renderQueue() 把 R5 的死 DOM 接活 (徽标/清单/引导/删除);
+  refreshQueueList() 变更后拉取; model picker 优先 configOptions;
+  修复 model picker 对导入绑定 state 赋值的 ESM bug
+- **验证**: 478 测试 (477 pass / 0 fail / 1 skipped), lint 0 warning,
+  `npm run verify` 全绿; live smoke (真实 0.4.2) 11/11
+  (`acp-probe/smoke-webui-042.mjs`)
 
 ---
 
 ## 进行中 (In Progress)
 
-### PR #16 推进 (等待 reviewer)
+### 官方仓库 PR 线 (待用户决策)
 
-- hetaoBackend (COLLABORATOR) 还没 re-review Round 3+4
-- modacker (NONE) Round 4 提了 test count drift 反馈
-- Round 1-4 PR 评论 4 条 (v1.0.1 main / CORS / load-time blocker / db.js + TUI gap) 待用户粘贴
-- Round 5 推送后会触发 PR #16 自动更新, 需要再写一条评论说明 v1.0.2 新增
-
----
+- `MiniMax-AI/MiniMax-Code-Plugins`: PR #16 (用户, round 1–4 基线) /
+  #23 (modacker, round 5) / #31 (modacker, round 8) 全部 OPEN 未合并,
+  三者互相 supersede
+- 本仓库 main 已含 round 5–8 全部内容 (blob 级一致); 本地统一线 =
+  `refactor/modularization` (v1.1.0)
+- 待决策: 更新 #31 还是开新一轮 PR (从 dist 产出提交)
 
 ## 待办 (Backlog)
 
-### Round 6 — v1.0.3 完成 (2026-08-26, 累计 R5+R6 10 commit 落地)
-
-- ✅ acp.mjs: 加 4 个 session/goal RPC (`goalGet`/`goalCreate`/`goalPatch`/`goalClear`) + 修 v1.0.2 queue() 方法名错 (R5 误用 'session/queue', R6 修 'session/queue/enqueue')
-- ✅ server/lib/state-bus.js: GOAL_STATUSES 导出 (5 状态 enum, 跟 mcode 内部同步)
-- ✅ server/routes/chat.js: 4 个 handleGoal* handler (Create/Patch/Clear/Get) + withMcodeSession helper
-- ✅ server/router.js: POST/PATCH/DELETE/GET /api/chat/goal 4 条路由
-- ✅ client: renderGoalBudgetBar + renderDelegationCard (state.goalBudget/activeDelegations)
-- ✅ client: openAskModal/closeAskModal 启动/停 30s 倒计时
-- ✅ client: 3 个新 DOM 节点 (goal-bar / delegation-card / ask-countdown)
-- ✅ client: ~125 行新 CSS (5 状态色 / 子任务 dot / 倒计时 banner)
-- ✅ 18 条新 i18n key (zh + en)
-- ✅ Goal 自动结算 toast (sessionStorage 防重弹)
-- ✅ 20 个新单测 (lib-acp-goal 8 + routes-chat-goal 8 + events-ask-countdown 4)
-- ✅ 修 server-startup.test.js 用 PORT=8090 避免冲突
-- ✅ Lint 0 warning, 435/0/1 pass
-- ⏳ 独立 verifier audit (R6 待派, 按 superpowers requesting-code-review skill 走)
-- ⏳ 不 push (等用户说"推", 5 个 round 全部做完才推 fork main, 用户决策 v3)
-- Goal 独立验证展示 (LLM-as-judge 推 `goal_update` 带 verifyResult)
-- Ask 等待自动继续时展示倒计时 (mcode 0.2.4 changelog 说有, 客户端兜底 30s)
-- 验证 mcode 0.2.4 真实 acp method `session/goal` 的 sub-actions (get/create/settle/verify) shape
-- 8-12 个新单测
-
-### Round 7 — Plugin Skills + Hooks + Ctrl+U (1-2 周)
-
-- server: 新增 `acp.listSkills()` 包装 + 30s 缓存
-- client: `/` palette 合并 webui 内置 + mcode 推过来的 plugin skills
-- Ctrl+U 全局 keybinding 调 `/api/sessions/resume?strategy=most-recent`
-- Hook observer: server 新增 `lib/hooks-observer.js` 订阅 mcode acp 推的 hook 通知
-- Hook observer: client 顶栏 "Hooks" 计数 + 重大事件 toast + 历史 detail
-- 验证 mcode 0.2.4 真实 hook notification method 名 (推测 `hook/pre_tool_use` 等)
-- SECURITY-NOTES §10 加 webui 作为 hook observer 的信任模型
-- 10-15 个新单测
-
-### Round 8 — 体验改进 (1-2 周)
-
-- 启动阶段展示 "Server loading" 状态, Runtime 就绪前禁止提交消息
-- Composer 空闲时展示操作 Tips
-- 图片绝对路径粘贴 → 简短占位符 (客户端 regex)
-- 后台任务提醒去重 + 读取计数稳定 (依赖 mcode acp 任务生命周期事件, 真实事件名待验)
-- 6-10 个新单测
-
-### 日常维护
-
-- 关注 mcode TUI 新版本 (0.2.5+, 0.3.x) CHANGELOG
-- 跟进 PR #16 reviewer 反馈
-- 跟踪 mcode acp 协议 schema 变化
-- 跟进 mcode 新增的 slash 命令 (TUI 描述: fork / clone / goal / queue / steer / plan / tree 等)
-
----
+- 官方仓库 PR 整合 (见上)
+- 跟踪 mcode 0.5+ CHANGELOG; 每轮适配先跑 `acp-probe/probe-042*.mjs`
+  式的 probe (别信 bundle grep — 0.4.2 里 search/tree/root 的字符串
+  都在但没注册)
+- 已知性能债: queue/goal/steer 每请求新起一个 `mcode acp` 进程
+  (~1.7s 冷启动); 0.4.2 会话进程域化后理论上可以改成长驻 client +
+  按需 load, 待做
+- fork 的 `message-boundary-not-found` 边界条件待查 (probe r4)
+- Session Center 的 search/delete/tree: ACP 无此面, 前端只能做
+  session/list 客户端过滤; mcode 官方若在 ACP 暴露再接
 
 ## 风险 (Risks)
 
-| ID | 风险 | 概率 | 影响 | 缓解 |
-|---|---|---|---|---|
-| R1 | hetaoBackend 长期不 re-review PR #16 | 中 | 高 (Round 1-4 收尾卡住) | Round 5 推完主动 re-request review |
-| R2 | modacker 提的 test count drift 未解 | 低 | 中 (影响 reviewer 信任) | Round 5 推完在 PR 评论解释 (CI env 差异) |
-| R3 | mcode 0.2.5+ 改 acp protocol 破坏 v1.0.2 | 低 | 高 (要重做 acp.mjs) | 关注 upstream changelog, 跟 mcode TUI release 节奏 |
-| R4 | 用户对 btn-plus popover UX 不满意 | 中 | 低 (改 UI 不是破坏) | Round 5 推送前先内部 demo, 收反馈再调整 |
-| R5 | Goal 真实 acp method shape 跟计划猜的不一样 | 中 | 中 | Round 6 实施前先 probe mcode 0.2.4 (cli.js 进一步验证) |
-| R6 | Hook notification 真实 method 名跟计划猜的不一样 | 中 | 中 | Round 7 实施前先 probe |
-| R7 | mcode 旧版本用户 (0.2.3-) 装上 webui v1.0.2 直接无法启动 | 高 (必然) | 中 (用户体验差) | 启动 banner 错误信息已写双语 + 升级命令, 文档说明 |
+| ID | 风险 | 缓解 |
+|---|---|---|
+| R1 | mcode 0.5+ 又改 ACP 面 | 每轮先 probe; extRequest 兼容层已有回退模式 |
+| R2 | request_permission 自动 cancelled 会拒掉 LAN 用户的工具确认 | 后续接 webui 确认弹窗 (serverRequest 事件已上抛) |
+| R3 | 官方 PR 线与本地统一线漂移 | main 已合并统一线; dist 打包流程文档化 |

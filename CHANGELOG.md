@@ -9,6 +9,71 @@ This project follows [Keep a Changelog](https://keepachangelog.com/).
 The `## Unreleased` section at the top tracks changes that have
 landed on the development branch but are not yet cut into a release.
 
+## v1.1.0 — 2026-09-12 (mcode 0.3/0.4 适配 + 布局收敛)
+
+适配 mcode TUI 0.3.x–0.4.2（实测 release 0.4.2，probe 报告见
+`docs/acp-probe-0.4.md`）；同时把仓库收敛成单树布局。
+
+### Added
+
+- **ACP 兼容层**（`acp.mjs`）— `extRequest()` 扩展方法优先走 0.3+ 的
+  `mcode/session/*` 命名空间，遇 "Method not found" 自动回退 0.2.x 裸名
+  （queue 五件套、steer、goal 四件套，进程级命名空间缓存）。
+- **取消路径修复** — mcode 0.3+ 移除了 `session/cancel`；`cancel()`
+  回退为 `session/close`（运行中 turn 以 `stopReason:"cancelled"` 结束）
+  + 立即 `session/load` 重新挂载。
+- **`session/request_permission` 应答器** — server→client 请求现在会被
+  自动应答（默认保守 `cancelled`）并通过 `serverRequest` 事件上抛，
+  mcode 不再挂起等待。
+- **新路由** — `GET /api/chat/queue`（队列快照）、
+  `GET /api/chat/config-options`（模型/权限模式下拉数据源）、
+  `POST /api/sessions/acp-activate`、`POST /api/sessions/acp-close`
+  （Session Center 的 ACP 面）。
+- **前端队列面板** — R5 建好的 queue-badge/queue-list DOM 首次接上数据源：
+  徽标计数、队列清单、条目级 引导/删除 操作；0.3+ 无 `queue_update`
+  推送，改为变更后主动拉取（`refreshQueueList`）。
+- **模型切换优先走 ACP** — model picker 优先用 session `configOptions`
+  （真实时值 + 当前选中标记 + BYOK 渠道），经
+  `POST /api/chat/config-option` 切换；旧 `/api/models` 流程保留为回退。
+- **`mcode/session/*_update` 通知归一化** — 独立通知重发射为
+  `sessionUpdate` 形状，下游 state-bus/前端零改动。
+
+### Changed
+
+- **load-first** — 0.4.2 的 ACP 会话是进程域的：每请求新建的 client
+  必须先 `session/load` 才能操作 session（否则 goal/queue/mode/close
+  全部 `Resource not found`）。所有操作 `cs.mcodeSessionId` 的路由
+  都在 start 后先 load。
+- **参数形状** — `set_mode` 用 `modeId`（0.2.4 的 `mode` 保留为回退）；
+  `set_config_option` 用 `{configId, value}`（`{key, value}` 保留为回退）；
+  `resume`/`fork` 补 `cwd`；usage 从 `usage_update` 通知累计（prompt
+  response 不再带 usage）。
+- **仓库布局收敛** — 删除 `plugins/Wzdhehe/mcode-webui/` 手工镜像，
+  repo root 即插件源；`package:plugin` 从 root 按 EXCLUDE 清单产出
+  dist，`validate:plugin` 校验 dist 产物，`verify.mjs` 顺序改为
+  package → validate → test → lint。
+- **round 1–8 审计修复并入主树** — modacker 在官方 PR 线做的 round
+  5–8（better-sqlite3 resolver、Token Plan 套餐用量、CORS per-origin
+  allowlist、跨域 bootstrap-token 泄露修复、`csrf-token-disclosure`
+  等测试）从镜像移植到根目录代码。
+
+### Fixed
+
+- model picker 回调里对导入绑定 `state` 赋值（ESM 只读绑定会抛
+  TypeError）→ 改用 `setState()`。
+- `lib-db-resolver.test.js` 的 POSIX 路径断言在 Windows 上必红
+  （上游 CI 仅 ubuntu）→ 改为平台无关的路径段比较。
+- `server-startup.test.js` 恢复 R6 的 `TEST_PORT=8090`（避免与开发
+  server 抢 8080）。
+
+### 验证
+
+- 单测 478 个：477 pass / 0 fail / 1 skipped；lint 0 warning；
+  `npm run verify` 全绿（package → validate → test → lint）。
+- Live smoke（`acp-probe/smoke-webui-042.mjs`，真实 mcode 0.4.2）：
+  11/11 — send/prompt、goal 生命周期、queue enqueue/list、
+  config-options、set_mode、acp-close。
+
 ## Unreleased
 
 > Documentation patch layered on top of v1.0.0 — no behavior
