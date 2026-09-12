@@ -12,7 +12,6 @@
     "coverage": "c8 --reporter=text --reporter=lcov node --experimental-test-module-mocks --test test/*.test.js",
     "lint": "eslint server/ test/",
     "format": "prettier --write server/ test/",
-    "setup:plugin": "node scripts/setup-plugin-layout.mjs",
     "package:plugin": "node scripts/package-plugin.mjs",
     "validate:plugin": "node scripts/validate-plugin.mjs",
     "verify": "node scripts/verify.mjs"

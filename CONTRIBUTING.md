@@ -3,7 +3,7 @@
 Thanks for your interest in Mcode Web UI! This document covers
 the day-to-day contribution workflow. For the bigger picture (plugin
 packaging, release process), see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
-and [`plugins/Wzdhehe/mcode-webui/README.md`](plugins/Wzdhehe/mcode-webui/README.md).
+and [`README.md`](README.md).
 
 ## Code of conduct
 
@@ -35,46 +35,38 @@ npm run dev               # node server.js
 
 ## Repository layout
 
-This repo has a **dual layout** — both copies are kept in sync:
+Since v1.1 the repo root **is** the plugin tree (the old
+`plugins/Wzdhehe/mcode-webui/` mirror was retired):
 
 ```
-Mcode-webui/                          # ← the development tree (root)
+Mcode-webui/                          # ← dev tree = plugin source
 ├── server/  public/  test/          # Node + frontend + tests
-├── docs/                            # ARCHITECTURE, API, CAPABILITIES, …
-├── acp.mjs, server.js, package.json
+├── docs/  references/  skills/mcode-webui/
+├── acp.mjs  server.js  package.json
+├── plugin.json  LICENSE             # official plugin manifests
 │
-└── plugins/Wzdhehe/mcode-webui/     # ← the plugin artifact
-    ├── server/  public/  test/      # ↑ real copies, not symlinks
-    ├── docs/  references/  skills/
-    ├── plugin.json  package.json  LICENSE
-    ├── README.md  PR_DESCRIPTION.md
-    └── SKILL.md                    # lives at skills/mcode-webui/SKILL.md
+└── scripts/                         # repo-infra — excluded from packaging
+    └── package-plugin.mjs           #   → dist/Wzdhehe/mcode-webui/
 ```
 
-**Why two copies?** The community plugin registry takes the
-`plugins/.../Mcode-webui/` tree as the submission. We keep it as a
-real directory copy (not a junction or symlink — those break
-zip-packaging and confuse `git log`).
-
-`npm run setup:plugin` is a no-op on the current layout (it used to
-create junctions; the trees have been expanded since).
+`npm run package:plugin` assembles the shippable artifact under
+`dist/Wzdhehe/mcode-webui/` (repo-infra files like `scripts/`,
+`node_modules/`, `coverage/`, `dist/`, logs and `docs/PROGRESS.md`
+are excluded); `npm run validate:plugin` validates that artifact
+against the official plugin contract.
 
 ## Editing flow
 
-1. **Edit at the repo root** (`server/`, `public/`, `test/`).
-2. **Mirror the change to the plugin tree** — copy the changed files
-   from `<root>/server/...` to `plugins/Wzdhehe/mcode-webui/server/...`,
-   and the same for `public/`, `test/`, `docs/`.
-   (The `package:plugin` script does this for you, but a
-   per-PR manual sync is fine for small changes.)
-3. **Run the gate**:
+1. **Edit at the repo root** (`server/`, `public/`, `test/`) — there
+   is no mirror to keep in sync anymore.
+2. **Run the gate**:
    ```bash
    npm test
    npm run lint
-   npm run validate:plugin
+   npm run package:plugin && npm run validate:plugin
    ```
-4. **Commit** with a conventional message (see below).
-5. **Push** to a feature branch and open a PR.
+3. **Commit** with a conventional message (see below).
+4. **Push** to a feature branch and open a PR.
 
 ## Commit message format
 
@@ -110,17 +102,17 @@ practice; log + continue.
 
 ## Pull request checklist
 
-- [ ] `npm test` passes (382 + 1 skipped)
+- [ ] `npm test` passes
 - [ ] `npm run lint` is clean (0 warnings)
-- [ ] `npm run validate:plugin` is clean (mirrors official gate)
-- [ ] Plugin tree (`plugins/.../Mcode-webui/`) is in sync with root
+- [ ] `npm run package:plugin && npm run validate:plugin` is clean
+      (mirrors official gate, validates the dist artifact)
 - [ ] No personal data in commit content (no IPs, no usernames, no
       real session IDs)
 - [ ] New env vars documented in `docs/API.md` and `plugin.json`
 - [ ] New endpoints / events documented in `docs/API.md`
 - [ ] `CHANGELOG.md` updated under an "Unreleased" section
 - [ ] If destructive behavior changes, the security note
-      `plugins/.../references/SECURITY-NOTES.md` is updated (and
+      `references/SECURITY-NOTES.md` is updated (and
       `plugin.json`'s `extensions.securityNotes` summary stays in sync)
 
 ## Adding a new route / event / panel
@@ -154,14 +146,15 @@ short version:
 
 ## Release process
 
-1. Bump `version` in `package.json` (root + plugin copy).
+1. Bump `version` in `package.json` (root).
 2. Move "Unreleased" section in `CHANGELOG.md` to a dated
    versioned section.
 3. `npm run package:plugin` — produces `dist/Wzdhehe/mcode-webui/`
-   + `dist/Wzdhehe/Mcode-webui.zip`.
+   + `dist/Wzdhehe/mcode-webui.zip` from the root tree.
 4. Open a PR to the community registry
    [`MiniMax-AI/MiniMax-Code-Plugins`](https://github.com/MiniMax-AI/MiniMax-Code-Plugins)
-   adding only the `plugins/Wzdhehe/mcode-webui/` tree (per the
+   adding the packaged tree as `plugins/Wzdhehe/mcode-webui/`
+   (copy the contents of `dist/Wzdhehe/mcode-webui/` — per the
    "one folder = one plugin" model — see the official README).
 5. Tag the release: `git tag v1.X.Y && git push --tags`.
 

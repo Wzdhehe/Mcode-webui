@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // scripts/validate-plugin.mjs
 //
-// Validate plugins/Wzdhehe/mcode-webui/ against the mcode-plugin-guide
-// contract.md + red-lines.md. Single source of truth for what
-// "shippable" means.
+// Validate the packaged plugin artifact dist/Wzdhehe/mcode-webui/ against
+// the mcode-plugin-guide contract.md + red-lines.md. Single source of
+// truth for what "shippable" means. (v1.1: validates the dist artifact —
+// the repo root is the dev source and contains repo-infra files that must
+// not ship; run `npm run package:plugin` first.)
 //
 // Checks (exit non-zero on any ERR):
 //   - plugin.json: top-level white-list, $schema, name, version, description,
@@ -20,13 +22,14 @@
 //
 // Usage:
 //   node scripts/validate-plugin.mjs
+//   npm run validate:plugin
 
 import { readFileSync, readdirSync, lstatSync, statSync, existsSync, readlinkSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const PLUGIN_DIR = join(ROOT, "plugins", "Wzdhehe", "mcode-webui");
+const PLUGIN_DIR = join(ROOT, "dist", "Wzdhehe", "mcode-webui");
 const PLUGIN_JSON = join(PLUGIN_DIR, "plugin.json");
 const SKILL_MD = join(PLUGIN_DIR, "skills", "mcode-webui", "SKILL.md"); // v1.0: 官方布局 skills/<name>/SKILL.md
 const README = join(PLUGIN_DIR, "README.md");
@@ -37,6 +40,12 @@ const warnings = [];
 const ok = (msg) => console.log(`  OK   ${msg}`);
 const fail = (msg) => { errors.push(msg); console.log(`  ERR  ${msg}`); };
 const warn = (msg) => { warnings.push(msg); console.log(`  WARN ${msg}`); };
+
+if (!existsSync(PLUGIN_DIR)) {
+  fail(`dist artifact not found: ${PLUGIN_DIR}`);
+  fail("run `npm run package:plugin` first");
+  printSummaryAndExit();
+}
 
 // ---------------------------------------------------------------
 // 1. plugin.json
@@ -199,22 +208,6 @@ function walkCheckSymlinks(p) {
 walkCheckSymlinks(PLUGIN_DIR);
 if (symlinkCount === 0) ok("no symlinks/junctions in plugin tree");
 
-// Also verify dist/ is clean (if it exists)
-const DIST = join(ROOT, "dist", "Wzdhehe", "mcode-webui");
-if (existsSync(DIST)) {
-  let distSym = 0;
-  function walkDist(p) {
-    let lst;
-    try { lst = lstatSync(p); } catch { return; }
-    if (lst.isSymbolicLink()) { distSym++; fail(`dist symlink: ${p}`); return; }
-    if (lst.isDirectory()) for (const c of readdirSync(p)) walkDist(join(p, c));
-  }
-  walkDist(DIST);
-  if (distSym === 0) ok(`dist/ ${DEST_REL(DIST)} is clean (no symlinks)`);
-} else {
-  warn(`dist/ not built yet — run \`npm run package:plugin\` to verify release artifact`);
-}
-
 // ---------------------------------------------------------------
 // 6. No UTF-8 BOM in any text file
 // ---------------------------------------------------------------
@@ -292,8 +285,4 @@ function printSummaryAndExit() {
   console.log(`errors:   ${errors.length}`);
   console.log(`warnings: ${warnings.length}`);
   process.exit(errors.length > 0 ? 1 : 0);
-}
-
-function DEST_REL(p) {
-  return p.replace(ROOT, "").replace(/^[\\/]/, "");
 }

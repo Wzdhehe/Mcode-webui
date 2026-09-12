@@ -3,10 +3,12 @@
 //
 // Full pre-flight check for shipping the mcode-webui plugin.
 // Runs in order:
-//   1. validate-plugin   (plugin.json + SKILL.md + README + LICENSE + symlinks + BOM + TODO)
-//   2. npm test          (382 unit tests + 1 skipped, must all pass)
-//   3. npm run lint      (ESLint, 0 warnings)
-//   4. npm run package:plugin  (rebuild dist/ zip)
+//   1. package:plugin   (root -> dist/Wzdhehe/mcode-webui/ + zip; v1.1: dist
+//                       is built FIRST so validate can check the artifact)
+//   2. validate-plugin  (plugin.json + SKILL.md + README + LICENSE + symlinks
+//                        + BOM + TODO, against the dist artifact)
+//   3. npm test         (unit tests, must all pass)
+//   4. npm run lint     (ESLint, 0 warnings)
 //
 // Exits non-zero on first failure. Outputs a summary at the end.
 //
@@ -25,6 +27,11 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // actual script path works everywhere.
 const steps = [
   {
+    name: "package:plugin",
+    cmd: "node",
+    args: [join(ROOT, "scripts", "package-plugin.mjs")],
+  },
+  {
     name: "validate-plugin",
     cmd: "node",
     args: [join(ROOT, "scripts", "validate-plugin.mjs")],
@@ -42,11 +49,6 @@ const steps = [
     name: "lint",
     cmd: "node",
     args: ["node_modules/eslint/bin/eslint.js", "server/", "test/"],
-  },
-  {
-    name: "package:plugin",
-    cmd: "node",
-    args: [join(ROOT, "scripts", "package-plugin.mjs")],
   },
 ];
 

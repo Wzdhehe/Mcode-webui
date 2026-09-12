@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // scripts/package-plugin.mjs
-// Package plugins/Wzdhehe/mcode-webui/ into a distributable directory and
-// zip file. Resolves any junction/symlink so the final artifact contains
-// only real files (mcode-plugin-guide contract forbids symlinks in hosted
-// plugins).
+// Package the repo ROOT into a distributable plugin directory and zip
+// file. The repo root is the single source of truth (the old
+// plugins/Wzdhehe/mcode-webui/ mirror was retired); repo-infra files are
+// excluded via SKIP/SKIP_REL below. Resolves any junction/symlink so the
+// final artifact contains only real files (mcode-plugin-guide contract
+// forbids symlinks in hosted plugins).
 //
 // Usage:
 //   node scripts/package-plugin.mjs
@@ -11,7 +13,8 @@
 //   #   dist/Wzdhehe/mcode-webui/        (expanded tree, no symlinks)
 //   #   dist/Wzdhehe/mcode-webui.zip     (zipped)
 //
-// Skips: node_modules/, .git/, coverage/, .server.*, *.log, etc.
+// Skips: node_modules/, .git/, .github/, coverage/, dist/, scripts/,
+// data/, probes/, logs, repo-only docs, etc.
 
 import {
   cpSync,
@@ -29,20 +32,47 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SRC = join(ROOT, "plugins", "Wzdhehe", "mcode-webui");
+const SRC = ROOT; // v1.1: root IS the plugin tree now (mirror retired)
 const DEST_PARENT = join(ROOT, "dist", "Wzdhehe");
 const DEST = join(DEST_PARENT, "mcode-webui");
 
-// Files / dirs to skip
+// Files / dirs to skip (by entry name, at any depth)
 const SKIP = new Set([
   "node_modules",
   ".git",
+  ".github",
   "coverage",
+  "dist",
+  "scripts",
+  "data",
+  "probes",
+  ".prettierrc",
+  ".prettierignore",
+  "CHANGELOG.md",
+  "REFACTORING.md",
+  "package-lock.json",
+  "start-with-debug.cjs",
+  "goal-plan-probe.cjs",
+  "probe-acp.mjs",
+  "acp-probe.cjs",
+  ".env-debug",
+  ".probe.log",
+  "probe-result.log",
+  "server-test.out",
+  "server-test.err",
   ".server.log",
+  ".server.log.err",
   ".server.err",
   ".server.out.log",
   ".server.err.log",
+  ".server-stdout.log",
+  ".server-stderr.log",
+  "acp-probe-stderr.err",
+  "acp-probe-stdout.out",
 ]);
+
+// Paths to skip (relative to SRC, forward slashes)
+const SKIP_REL = new Set(["docs/PROGRESS.md"]);
 
 // Return the symlink/junction target if `p` is one; null otherwise.
 //   On Windows, `lstat` does NOT report isSymbolicLink() for junctions in
@@ -72,12 +102,14 @@ function readJunctionTarget(p) {
 //   - If it's a junction/symlink: recurse into the resolved target
 //   - If it's a real dir: recurse
 //   - If it's a real file: copy
-function copyRecursive(src, dest, stats) {
+function copyRecursive(src, dest, stats, rel = "") {
   const st = stats || statSync(src);
   if (st.isDirectory()) {
     mkdirSync(dest, { recursive: true });
     for (const child of readdirSync(src)) {
       if (SKIP.has(child)) continue;
+      const childRel = rel ? `${rel}/${child}` : child;
+      if (SKIP_REL.has(childRel)) continue;
       const childSrc = join(src, child);
       const childDest = join(dest, child);
       const childTarget = readJunctionTarget(childSrc);
@@ -88,12 +120,16 @@ function copyRecursive(src, dest, stats) {
           childTarget.startsWith("/") || /^[A-Z]:[\\/]/i.test(childTarget)
             ? childTarget
             : join(dirname(childSrc), childTarget);
-        copyRecursive(resolved, childDest);
+        copyRecursive(resolved, childDest, undefined, childRel);
       } else {
-        copyRecursive(childSrc, childDest);
+        copyRecursive(childSrc, childDest, undefined, childRel);
       }
     }
   } else if (st.isFile()) {
+    if (/\.(log|err|out)$/.test(src) && rel && !rel.includes("/")) {
+      // top-level stray log/err/out artifacts — never ship
+      return;
+    }
     cpSync(src, dest);
   }
   // else: skip sockets/devices/etc.
@@ -101,7 +137,6 @@ function copyRecursive(src, dest, stats) {
 
 if (!existsSync(SRC)) {
   console.error(`Source not found: ${SRC}`);
-  console.error("Run `npm run setup:plugin` first.");
   process.exit(1);
 }
 
