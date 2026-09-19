@@ -141,16 +141,29 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
     cs.context.thinkingStatus = "Running";
     setActiveChild(cid, client);
     pushStateFor(cid);
-    const safetyTimeout = setTimeout(() => {
-      if (r.status === "unknown") {
-        r.status = "timeout";
-        r.error = { message: "mcode acp prompt did not return in 90s" };
-        try {
-          client.stop();
-        } catch {}
-        finalize();
-      }
-    }, 90000);
+    // v1.1.1: 90s 固定超时会误杀长生成 (用户 8000 字任务 ~90s 被掐, 报
+    // "prompt did not return in 90s" 而模型仍在正常出 chunk)。改活动感知:
+    // 每个 chunk 到达都重置计时器 (回调尾部 armSafetyTimeout), 只有连续
+    // IDLE_TIMEOUT_MS 无任何输出才判定挂死。MCODE_PROMPT_IDLE_TIMEOUT_MS 可覆盖。
+    const IDLE_TIMEOUT_MS =
+      Number(process.env.MCODE_PROMPT_IDLE_TIMEOUT_MS) || 90000;
+    let safetyTimeout = null;
+    const armSafetyTimeout = () => {
+      if (safetyTimeout) clearTimeout(safetyTimeout);
+      safetyTimeout = setTimeout(() => {
+        if (r.status === "unknown") {
+          r.status = "timeout";
+          r.error = {
+            message: `mcode acp prompt idle: no output for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s`,
+          };
+          try {
+            client.stop();
+          } catch {}
+          finalize();
+        }
+      }, IDLE_TIMEOUT_MS);
+    };
+    armSafetyTimeout();
     function finalize() {
       if (r._finalized) return;
       r._finalized = true;
@@ -582,7 +595,11 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
         }
         cs.running.lastDeltaAt = now;
         cs.context.tps = cs.running.tps;
-        pushStateFor(cid);
+        // v1.1.1: chunk 到达 = turn 活着, 重置空闲超时; 状态推送走 300ms 节流
+        // (这里原来是逐 chunk 全量快照推送, 长回复会打爆 SSE, 也让上面的
+        // throttledStreamPush 形同虚设)
+        armSafetyTimeout();
+        throttledStreamPush();
       })
       .then((result) => {
         r.answer = result.answer || r.answer;
