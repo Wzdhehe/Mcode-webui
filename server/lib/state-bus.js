@@ -36,7 +36,7 @@ import {
 // v0.5.ai: 每个 webui tab 一个独立 state。
 export function makeClientState() {
   return {
-    version: "1.0", // v1.0: 首次公开发布版本 (顶栏显示 "v" + version)
+    version: "1.1.1", // 顶栏显示 "v" + version
     workspace: { dir: DEFAULT_WORKSPACE, branch: null, tree: null }, // v0.5.bb: 默认 null（之前是 MCODE_ROOT）
     model: { name: DEFAULT_MODEL, thinking: "On", ctx: "512k" },
     sessionId: null, // webui 侧边栏 session id (randomUUID)

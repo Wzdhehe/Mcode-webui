@@ -9,6 +9,31 @@ This project follows [Keep a Changelog](https://keepachangelog.com/).
 The `## Unreleased` section at the top tracks changes that have
 landed on the development branch but are not yet cut into a release.
 
+## v1.1.1 — 2026-09-19 (内置浏览器实测修复)
+
+在内置浏览器对 0.4.2 实测过程中发现并修复的 4+2 个缺陷。
+
+### Fixed
+
+- **正文流式** — thought/message chunk 更新 `cs.chat` 后 300ms 节流推送
+  SSE（`throttledStreamPush`）；回调尾部的逐 chunk 全量推送改走同一节流，
+  长回复不再打爆 SSE。
+- **运行中自动排队** — `cs.mcodeSessionId` 提前到 `session/new` 返回即
+  赋值；`runMcodeAcp` 入口提前置位 `running.active`（冷启动 5-8s 盲区内
+  并发 send 不再各自开新 session / 报 "active Turn"）。
+- **队列徽标台账** — 0.4.2 `queue/list` 投递后返回空、且无推送通知，
+  徽标恒 0。改为服务端台账 `cs.mcodeQueue`（enqueue 记账、finalize 对账
+  清零、update/delete/steer 同步），`GET /api/chat/queue` 直读台账。
+- **徽标主题配色** — `.queue-badge` 原用主题未定义的 `--accent-soft`/
+  `--accent-hover`（浅色 hover 黑底黑字）。改 `--accent-bg`/`--accent-text`/
+  `--accent`/`--on-accent` 语义变量，浅色=墨/纸、深色=纸/墨，两主题两态
+  （普通/悬停）均清晰可读（浅深 × 中英已逐一截图验证）。
+- **90s 固定超时误杀长任务** — prompt 安全超时改活动感知：每个 chunk
+  重置计时器，连续 90s 无输出才算挂死（`MCODE_PROMPT_IDLE_TIMEOUT_MS`
+  可覆盖），8000 字长文不再中途被杀。
+- **`btn-send` 标题 i18n 缺失** — 硬编码 "发送 (Enter)"，补
+  `data-i18n-title="btn_send_title"`。
+
 ## v1.1.0 — 2026-09-12 (mcode 0.3/0.4 适配 + 布局收敛)
 
 适配 mcode TUI 0.3.x–0.4.2（实测 release 0.4.2，probe 报告见
