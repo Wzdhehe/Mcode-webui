@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { spawn } from "node:child_process";
 import { DEFAULT_WORKSPACE } from "./config.js";
 import { detectTuiCwd } from "./config.js";
 import { pushStateFor } from "./state-bus.js";
@@ -270,7 +271,6 @@ export function getRecentWorkspaces({ search = "", limit = 5 } = {}) {
 export function pickDirectoryNative(signal) {
   const platform = process.platform;
   return new Promise((resolve, reject) => {
-    const { spawn } = require("node:child_process");
     let child;
     let settled = false;
     const settle = (fn) => {
@@ -286,16 +286,18 @@ export function pickDirectoryNative(signal) {
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       if (platform === "linux") {
-        // zenity（首选）或 kdialog（KDE fallback）
-        child = spawn("zenity", ["--file-selection", "--directory", "--title=选择工作区目录"], {
-          stdio: ["ignore", "pipe", "pipe"],
+        // zenity 需要 TTY 才能弹出对话框。后台 nohup 运行时 Node 没有 TTY，
+        // 用 setsid 创建独立 session，使其获得自己的 TTY 从而弹出 GTK 对话框。
+        // stdio: inherit 让 zenity 输出到终端（用户能看到路径）；pipe 捕获 stdout
+        // 以便读取返回值（exit code 0 时）。
+        child = spawn("setsid", ["--", "zenity", "--file-selection", "--directory", "--title=选择工作区目录"], {
+          stdio: ["ignore", "pipe", "inherit"],
           windowsHide: true,
+          env: { ...process.env },
+          detached: false,
         });
         let stdout = "";
         child.stdout.on("data", (d) => (stdout += d));
-        child.stderr.on("data", (d) => {
-          // zenity 用户取消 exit code 1，不打 error
-        });
         child.on("close", (code) => {
           if (signal?.aborted) {
             settle(() => reject(new Error("picker aborted")));
@@ -306,7 +308,7 @@ export function pickDirectoryNative(signal) {
             // 用户取消
             settle(() => resolve(null));
           } else {
-            // zenity not found → try kdialog
+            // 其他错误（zenity not found 等）→ try kdialog
             settle(() => {
               tryKdialog(signal).then(resolve).catch(reject);
             });
@@ -327,7 +329,7 @@ export function pickDirectoryNative(signal) {
           'set selectedFolder to choose folder with prompt "选择工作区目录"',
           "-e",
           "POSIX path of selectedFolder",
-        ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+        ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: { ...process.env } });
         let stdout = "";
         child.stdout.on("data", (d) => (stdout += d));
         child.on("close", (code) => {
@@ -354,6 +356,7 @@ export function pickDirectoryNative(signal) {
         child = spawn("powershell", ["-NoProfile", "-Command", ps], {
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
+          env: { ...process.env },
         });
         let stdout = "";
         child.stdout.on("data", (d) => (stdout += d));
@@ -378,7 +381,6 @@ export function pickDirectoryNative(signal) {
 }
 
 async function tryKdialog(signal) {
-  const { spawn } = require("node:child_process");
   return new Promise((resolve, reject) => {
     let settled = false;
     const settle = (fn) => {
@@ -390,9 +392,10 @@ async function tryKdialog(signal) {
     };
     const onAbort = () => settle(() => reject(new Error("picker aborted")));
     signal?.addEventListener("abort", onAbort, { once: true });
-    const child = spawn("kdialog", ["--getexistingdirectory", ".", "--title", "选择工作区目录"], {
-      stdio: ["ignore", "pipe", "pipe"],
+    const child = spawn("setsid", ["--", "kdialog", "--getexistingdirectory", ".", "--title", "选择工作区目录"], {
+      stdio: ["ignore", "pipe", "inherit"],
       windowsHide: true,
+      env: { ...process.env },
     });
     let stdout = "";
     child.stdout.on("data", (d) => (stdout += d));

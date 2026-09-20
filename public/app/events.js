@@ -797,12 +797,12 @@ export function attachEvents() {
         headers: { 'Content-Type': 'application/json', ...HEADERS },
       })
       const data = await r.json()
-      if (data && data.ok && data.dir) {
+      if (data && data.ok && data.path) {
         wsPicker.hidden = true
-        submitWorkspaceChange({ dir: data.dir, syncTui: false })
+        submitWorkspaceChange({ dir: data.path, syncTui: false })
       } else {
-        // 用户取消（dir 为空字符串）或异常
-        if (data && data.dir === '') {
+        // 用户取消（path 为空字符串）或异常
+        if (data && data.path === '') {
           // 取消，不做操作
         } else {
           showToast(data?.error || '目录选择失败', 3000)
