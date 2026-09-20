@@ -713,10 +713,16 @@ export function attachEvents() {
     wsRecentList.innerHTML = items.map(item => {
       const active = item.dir === cur ? ' active' : ''
       const name = wsShortName(item.dir) || item.dir
+      // 路径截断至30字符，tooltip显示完整路径
+      const fullPath = item.dir
+      const shortPath = fullPath.length > 30 ? '…' + fullPath.slice(-30) : fullPath
       const count = item.count > 0 ? `<span class="ws-picker-recent-count">${item.count}</span>` : ''
-      return `<div class="ws-picker-recent-item${active}" data-dir="${escapeHtml(item.dir)}" title="${escapeHtml(item.dir)}">
+      return `<div class="ws-picker-recent-item${active}" data-dir="${escapeHtml(item.dir)}" title="${escapeHtml(fullPath)}">
         ${folderIcon}
-        <span class="ws-picker-recent-name">${escapeHtml(name)}</span>${count}
+        <div class="ws-picker-recent-info">
+          <span class="ws-picker-recent-name">${escapeHtml(name)}</span>
+          <span class="ws-picker-recent-path" title="${escapeHtml(fullPath)}">${escapeHtml(shortPath)}</span>
+        </div>${count}
       </div>`
     }).join('')
 

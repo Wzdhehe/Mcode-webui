@@ -502,11 +502,29 @@ a.chip-lan-link .icon {
   opacity: 1;
 }
 
-.ws-picker-recent-name {
+.ws-picker-recent-info {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ws-picker-recent-name {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.ws-picker-recent-path {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
 }
 .ws-picker-recent-count {
   font-size: 11px;
@@ -519,6 +537,19 @@ a.chip-lan-link .icon {
 }
 .ws-picker-divider {
   height: 1px;
+  background: var(--border-light);
+  margin: 10px 0;
+}
+
+.ws-picker-actions-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ws-picker-actions-row .btn-workspace-action {
+  flex: 1;
+  justify-content: center;
+}
   background: var(--border);
   margin: 6px 0;
 }

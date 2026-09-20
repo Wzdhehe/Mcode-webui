@@ -396,11 +396,13 @@
               </div>
               <!-- v2 底部操作 -->
               <div class="ws-picker-divider"></div>
-              <button class="btn-workspace-action primary" id="ws-picker-pick-btn">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                <span data-i18n="ws_picker_pick">创建或打开新空间</span>
-              </button>
-              <button class="btn-workspace-action" id="ws-picker-nows-btn" data-i18n="ws_nows_btn">无需工作空间</button>
+              <div class="ws-picker-actions-row">
+                <button class="btn-workspace-action primary" id="ws-picker-pick-btn">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                  <span data-i18n="ws_picker_pick">选择目录</span>
+                </button>
+                <button class="btn-workspace-action" id="ws-picker-nows-btn" data-i18n="ws_nows_btn">无需工作空间</button>
+              </div>
             </div>
           </div>
           <!-- v0.5.bc: 工作区 chip 从欢迎页挪到输入框下面（独立一行，左对齐，仿 kimi） -->
