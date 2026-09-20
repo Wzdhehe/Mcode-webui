@@ -13,6 +13,7 @@ import { homedir, tmpdir } from "node:os";
 import { DEFAULT_WORKSPACE } from "./config.js";
 import { detectTuiCwd } from "./config.js";
 import { pushStateFor } from "./state-bus.js";
+import { loadSessions } from "./sessions.js";
 
 // v0.5.al: per-cid 切换 workspace
 // body: {dir, syncTui?, saveRecent?}
@@ -212,6 +213,203 @@ export function resolveWorkspaceCandidates(rawName, opts = {}) {
     home,
     candidates: candidates.slice(0, 12), // 超过 12 个候选基本等于没解析，让用户手动浏览
   };
+}
+
+// v2 (feat-workspace-lhl): GET /api/workspace/recent
+//   从 sessions DB 模糊搜索工作区列表，按最近会话时间倒排。
+//   search: 模糊匹配路径（不区分大小写），可空
+//   limit: 最大返回条数（默认 5，后端固定上限 20）
+//   响应: { ok, items: [{dir, name, lastActiveAt, sessionCount}], total }
+export function getRecentWorkspaces({ search = "", limit = 5 } = {}) {
+  const all = loadSessions();
+  // 按 dir 分组，聚合 lastActiveAt 和 sessionCount
+  const map = new Map();
+  for (const s of all) {
+    const dir = (s.workspace || "").trim();
+    if (!dir) continue;
+    const time = s.updatedAt || s.createdAt || 0;
+    if (!map.has(dir)) {
+      map.set(dir, { dir, lastActiveAt: time, sessionCount: 0 });
+    } else {
+      const entry = map.get(dir);
+      entry.lastActiveAt = Math.max(entry.lastActiveAt, time);
+    }
+    map.get(dir).sessionCount++;
+  }
+  let items = [...map.values()];
+  if (search && search.trim()) {
+    const q = search.trim().toLowerCase();
+    items = items.filter(
+      (it) =>
+        it.dir.toLowerCase().includes(q) ||
+        basename(it.dir).toLowerCase().includes(q),
+    );
+  }
+  items.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  const MAX_LIMIT = 20;
+  const safeLimit = Math.min(Number(limit) || 5, MAX_LIMIT);
+  const sliced = items.slice(0, safeLimit);
+  return {
+    ok: true,
+    items: sliced.map((it) => ({
+      dir: it.dir,
+      name: basename(it.dir) || it.dir,
+      lastActiveAt: it.lastActiveAt,
+      sessionCount: it.sessionCount,
+    })),
+    total: items.length,
+    search: search.trim(),
+    limit: safeLimit,
+  };
+}
+
+// v2 (feat-workspace-lhl): POST /api/workspace/pick
+//   后端 spawn 原生 OS 目录选择器（和 dsh 相同方式），
+//   Linux: zenity → kdialog fallback；macOS: osascript；Windows: PowerShell dialog。
+//   返回 { ok, path }（用户取消时 path === null）。
+export function pickDirectoryNative(signal) {
+  const platform = process.platform;
+  return new Promise((resolve, reject) => {
+    const { spawn } = require("node:child_process");
+    let child;
+    let settled = false;
+    const settle = (fn) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      child?.kill();
+      fn();
+    };
+    const onAbort = () => {
+      settle(() => reject(new Error("picker aborted")));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      if (platform === "linux") {
+        // zenity（首选）或 kdialog（KDE fallback）
+        child = spawn("zenity", ["--file-selection", "--directory", "--title=选择工作区目录"], {
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        });
+        let stdout = "";
+        child.stdout.on("data", (d) => (stdout += d));
+        child.stderr.on("data", (d) => {
+          // zenity 用户取消 exit code 1，不打 error
+        });
+        child.on("close", (code) => {
+          if (signal?.aborted) {
+            settle(() => reject(new Error("picker aborted")));
+          } else if (code === 0) {
+            const path = stdout.replace(/[\r\n]+$/, "").trim();
+            settle(() => resolve(path || null));
+          } else if (code === 1) {
+            // 用户取消
+            settle(() => resolve(null));
+          } else {
+            // zenity not found → try kdialog
+            settle(() => {
+              tryKdialog(signal).then(resolve).catch(reject);
+            });
+          }
+        });
+        child.on("error", (e) => {
+          settle(() => {
+            if (e.code === "ENOENT") {
+              tryKdialog(signal).then(resolve).catch(reject);
+            } else {
+              reject(e);
+            }
+          });
+        });
+      } else if (platform === "darwin") {
+        child = spawn("osascript", [
+          "-e",
+          'set selectedFolder to choose folder with prompt "选择工作区目录"',
+          "-e",
+          "POSIX path of selectedFolder",
+        ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+        let stdout = "";
+        child.stdout.on("data", (d) => (stdout += d));
+        child.on("close", (code) => {
+          if (signal?.aborted) {
+            settle(() => reject(new Error("picker aborted")));
+          } else if (code === 0) {
+            const path = stdout.replace(/[\r\n]+$/, "").trim();
+            settle(() => resolve(path || null));
+          } else {
+            // 用户取消（osascript -128 = user cancelled）
+            settle(() => resolve(null));
+          }
+        });
+        child.on("error", (e) => settle(() => reject(e)));
+      } else if (platform === "win32") {
+        // Windows: PowerShell 风格 folder picker（不依赖三方库）
+        const ps = [
+          "Add-Type -AssemblyName System.Windows.Forms",
+          "$f = New-Object System.Windows.Forms.FolderBrowserDialog",
+          "$f.Description = '选择工作区目录'",
+          "$f.ShowNewFolderButton = $true",
+          "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath } else { '' }",
+        ].join("; ");
+        child = spawn("powershell", ["-NoProfile", "-Command", ps], {
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        });
+        let stdout = "";
+        child.stdout.on("data", (d) => (stdout += d));
+        child.on("close", (code) => {
+          if (signal?.aborted) {
+            settle(() => reject(new Error("picker aborted")));
+          } else if (code === 0) {
+            const path = stdout.replace(/[\r\n]+$/, "").trim();
+            settle(() => resolve(path || null));
+          } else {
+            settle(() => resolve(null));
+          }
+        });
+        child.on("error", (e) => settle(() => reject(e)));
+      } else {
+        settle(() => reject(new Error(`unsupported platform: ${platform}`)));
+      }
+    } catch (e) {
+      settle(() => reject(e));
+    }
+  });
+}
+
+async function tryKdialog(signal) {
+  const { spawn } = require("node:child_process");
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      child?.kill();
+      fn();
+    };
+    const onAbort = () => settle(() => reject(new Error("picker aborted")));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const child = spawn("kdialog", ["--getexistingdirectory", ".", "--title", "选择工作区目录"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.on("close", (code) => {
+      if (signal?.aborted) {
+        settle(() => reject(new Error("picker aborted")));
+      } else if (code === 0) {
+        const path = stdout.replace(/[\r\n]+$/, "").trim();
+        settle(() => resolve(path || null));
+      } else {
+        settle(() => resolve(null)); // 用户取消
+      }
+    });
+    child.on("error", (e) => {
+      settle(() => reject(new Error("no supported native directory picker found (install zenity or kdialog)")));
+    });
+  });
 }
 
 // v0.5.am: 列出目录下的子目录（仅目录，懒加载给前端树用）

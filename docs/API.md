@@ -270,6 +270,42 @@ When `path` is omitted:
 - Windows: `roots: ["C:", "D:", …]`
 - Linux: `children: [{name: "/", path: "/", isDir: true}]`
 
+### `GET /api/workspace/recent?search=&limit=`
+
+Return recent workspaces from sessions DB (fuzzy search + count per dir).
+
+**Request** query:
+- `search` (string, optional) — fuzzy match on directory path; defaults to `""`
+- `limit` (int, optional) — max items to return; server-side cap 20; defaults to `5`
+
+**Response 200**
+```json
+{
+  "ok": true,
+  "items": [
+    { "dir": "/home/user/project", "count": 3 }
+  ],
+  "tmpDir": "/tmp"
+}
+```
+
+### `POST /api/workspace/pick`
+
+Spawn a native OS directory picker dialog (no browser permission prompt).
+
+**Implementation (v2 — feat-workspace-lhl):**
+- Linux: `zenity --file-selection --directory` → `kdialog --getexistingdirectory` fallback
+- macOS: `osascript -e "choose folder"`
+- Windows: PowerShell `System.Windows.Forms.FolderBrowserDialog`
+
+**Request** `{}` (empty body)
+
+**Response 200**
+```json
+{ "ok": true, "dir": "/path/to/chosen/dir" }
+```
+User cancelled → `{"ok": true, "dir": ""}`
+
 ---
 
 ## Settings

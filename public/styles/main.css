@@ -369,6 +369,96 @@ a.chip-lan-link .icon {
 .workspace-picker-recent:hover { background: var(--bg-hover, rgba(0,0,0,0.04)); color: var(--text); }
 .workspace-picker-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 10px; }
 
+/* v2 (feat-workspace-lhl): 搜索 + recent 列表 + 原生 picker */
+.ws-picker-search-wrap {
+  position: relative;
+  margin-bottom: 8px;
+}
+.ws-picker-search-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.ws-picker-search {
+  width: 100%;
+  padding: 7px 10px 7px 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input, var(--bg));
+  color: var(--text);
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.ws-picker-search:focus { outline: none; border-color: var(--accent); }
+.ws-picker-search::placeholder { color: var(--text-tertiary); }
+
+.ws-picker-recent-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  margin-bottom: 8px;
+}
+.ws-picker-recent-loading {
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.ws-picker-recent-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.ws-picker-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: background 0.1s;
+  border-bottom: 1px solid var(--border);
+}
+.ws-picker-recent-item:last-child { border-bottom: none; }
+.ws-picker-recent-item:hover { background: var(--bg-hover); color: var(--text); }
+.ws-picker-recent-item.active {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+  font-weight: 600;
+}
+.ws-picker-recent-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-picker-recent-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.ws-picker-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 0;
+}
+.ws-picker-recent-loading,
+.ws-picker-recent-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
 /* v0.5.at: chip-lan — 跟其他 btn-menu 同结构，仅 WiFi 图标按状态着色（文字 / 箭头保持正常色） */
 .btn-lan-toggle .chip-lan-icon {
   transition: stroke 0.15s;

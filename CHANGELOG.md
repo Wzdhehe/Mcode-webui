@@ -9,6 +9,29 @@ This project follows [Keep a Changelog](https://keepachangelog.com/).
 The `## Unreleased` section at the top tracks changes that have
 landed on the development branch but are not yet cut into a release.
 
+## Unreleased — feat-workspace-lhl
+
+> 工作区选择器重构（feature branch，未合并）
+
+### Added
+
+- **后端原生目录选择器**（`server/lib/workspace.js`）：
+  - `pickDirectoryNative(signal)` — 后端 spawn 原生 OS 对话框，无浏览器授权弹窗
+    - Linux: `zenity --file-selection --directory` → `kdialog --getexistingdirectory` fallback
+    - macOS: `osascript -e "choose folder"`
+    - Windows: PowerShell `System.Windows.Forms.FolderBrowserDialog`
+  - `getRecentWorkspaces(search, limit)` — 从 sessions DB 模糊搜索最近工作区（上限 20 条）
+- **新 API 端点**：
+  - `GET /api/workspace/recent?search=&limit=` — 返回最近工作区列表 + tmpDir
+  - `POST /api/workspace/pick` — 触发原生目录选择器
+
+### Changed
+
+- **前端工作区弹层**（`public/index.html` + `public/app/events.js`）：
+  - 推翻 `webkitdirectory` input（触发浏览器上传 UI）和 `showDirectoryPicker`（Chrome 首次授权弹窗）
+  - 改为：搜索框（300ms debounce）→ recent 列表（后端 DB 模糊搜索）→「创建或打开新空间」触发原生 picker →「无需工作空间」
+  - Chip 下拉（`ws-quick-picker`）改为使用 HTML 静态 DOM，而非动态创建
+
 ## v2.0.0 — 2026-09-20 (工业化重写，同步自 MiniMax-Code-Plugins PR #55 @ 7b4aae8)
 
 v1.x 单体 `server.js` 的工业化重写。本轮同步包含 PR #55 全量 26 提交，

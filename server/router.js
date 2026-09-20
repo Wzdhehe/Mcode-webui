@@ -245,6 +245,17 @@ const ROUTES = [
     match: (p) => p === "/api/workspace/resolve",
     handler: workspaceRoute.handleWorkspaceResolve,
   },
+  // v2 (feat-workspace-lhl): recent list + native OS picker
+  {
+    method: "GET",
+    match: (p) => p === "/api/workspace/recent",
+    handler: workspaceRoute.handleWorkspaceRecent,
+  },
+  {
+    method: "POST",
+    match: (p) => p === "/api/workspace/pick",
+    handler: workspaceRoute.handleWorkspacePick,
+  },
 
   // Settings
   {

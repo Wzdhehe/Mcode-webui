@@ -380,33 +380,27 @@
               </div>
             </div>
             <!-- v0.5.al: workspace picker popover（chip-workspace 点击弹出）
-                 v1.2 重排 (feat-workspace-lhl): 标题 → 工作区下拉（sessions DB tree）
-                 → sync 勾选 → 候选确认区 → 底部按钮排（浏览目录 | 无需工作空间）
-                 → 降级目录树面板。手输路径输入框与 recents 已删。 -->
+                 v2 (feat-workspace-lhl): 搜索框 → 最近 5 个工作区列表
+                 → 底部「创建或打开新空间」(原生 OS picker) +「无需工作空间」 -->
             <div class="workspace-picker" id="workspace-picker" hidden>
               <div class="workspace-picker-title" data-i18n="workspace_picker_title">切换工作区</div>
-              <select class="workspace-picker-select" id="workspace-picker-select"></select>
-              <input type="text" id="workspace-picker-input" class="workspace-picker-input"
-                     placeholder="或直接输入路径后按 Enter…" />
-              <label class="workspace-picker-sync">
-                <input type="checkbox" id="workspace-picker-sync" />
-                <span data-i18n="workspace_sync_tui">Also update mcode TUI's cwd (write cwd.json)</span>
-              </label>
-              <!-- 目录选择多候选/无候选时的内联确认区 -->
-              <div class="ws-native-candidates" id="workspace-picker-native-candidates" hidden></div>
-              <div class="workspace-picker-actions-row split">
-                <button class="btn-workspace-action" id="workspace-picker-browse-btn" data-i18n="ws_browse_btn">浏览目录…</button>
-                <button class="btn-workspace-action" id="workspace-picker-nows-btn" data-i18n="ws_nows_btn">无需工作空间</button>
+              <!-- v2 搜索框 -->
+              <div class="ws-picker-search-wrap">
+                <svg class="ws-picker-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="ws-picker-search" class="ws-picker-search"
+                       placeholder="搜索工作区…" autocomplete="off" />
               </div>
-              <!-- v1.2: 内置目录树折叠按钮（独立于浏览目录按钮） -->
-              <button class="btn-workspace-action" id="workspace-picker-browse-toggle" data-i18n="ws_browse_tree">内置目录树…</button>
-              <!-- v0.5.am: 可视化目录树浏览（懒加载）— 目录选择无候选时的降级 -->
-              <div class="workspace-picker-browse-panel" id="workspace-picker-browse-panel" hidden>
-                <div class="workspace-picker-breadcrumb" id="workspace-picker-breadcrumb"></div>
-                <div class="workspace-picker-tree" id="workspace-picker-tree">
-                  <div class="workspace-picker-tree-loading" id="workspace-picker-tree-loading" data-i18n="workspace_loading">加载中…</div>
-                </div>
+              <!-- v2 最近列表 -->
+              <div class="ws-picker-recent-list" id="ws-picker-recent-list">
+                <div class="ws-picker-recent-loading">…</div>
               </div>
+              <!-- v2 底部操作 -->
+              <div class="ws-picker-divider"></div>
+              <button class="btn-workspace-action primary" id="ws-picker-pick-btn">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <span data-i18n="ws_picker_pick">创建或打开新空间</span>
+              </button>
+              <button class="btn-workspace-action" id="ws-picker-nows-btn" data-i18n="ws_nows_btn">无需工作空间</button>
             </div>
           </div>
           <!-- v0.5.bc: 工作区 chip 从欢迎页挪到输入框下面（独立一行，左对齐，仿 kimi） -->

@@ -9,6 +9,8 @@ import {
   handleWorkspaceChange,
   browseWorkspace,
   resolveWorkspaceCandidates,
+  getRecentWorkspaces,
+  pickDirectoryNative,
 } from "../lib/workspace.js";
 import { DEFAULT_WORKSPACE } from "../lib/config.js";
 import { loadSessions } from "../lib/sessions.js";
@@ -116,4 +118,33 @@ export function handleWorkspaceResolve(req, res, _ctx) {
     "Content-Type": "application/json; charset=utf-8",
   });
   return res.end(JSON.stringify(result));
+}
+
+// v2 (feat-workspace-lhl): GET /api/workspace/recent
+//   返回最近工作区列表（后端 DB 模糊搜索）。
+//   ?search= 模糊匹配路径（可空）；?limit= 最大条数（默认 5，上限 20）
+//   响应: { ok, items: [{dir, name, lastActiveAt, sessionCount}], total, search, limit }
+export function handleWorkspaceRecent(req, res, _ctx) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const search = url.searchParams.get("search") || "";
+  const limit = Number(url.searchParams.get("limit")) || 5;
+  const result = getRecentWorkspaces({ search, limit });
+  res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+  return res.end(JSON.stringify(result));
+}
+
+// v2 (feat-workspace-lhl): POST /api/workspace/pick
+//   后端 spawn 原生 OS 目录选择器（zenity/kdialog/osascript/PowerShell）。
+//   响应: { ok, path }（用户取消时 path === null）
+export async function handleWorkspacePick(req, res, _ctx) {
+  try {
+    const path = await pickDirectoryNative();
+    const result = { ok: true, path };
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify(result));
+  } catch (e) {
+    const result = { ok: false, error: e.message };
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify(result));
+  }
 }
