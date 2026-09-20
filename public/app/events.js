@@ -1423,7 +1423,7 @@ export function attachEvents() {
     }
     // 关掉所有 popover
     document.querySelectorAll('.mode-popover, .settings-menu, .model-picker, .workspace-picker, .new-chat-picker').forEach(el => { el.hidden = true })
-    newChatPicker.hidden = true
+    if (newChatPicker) newChatPicker.hidden = true
     render()
   }
 
