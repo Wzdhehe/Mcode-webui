@@ -117,7 +117,8 @@ export function render() {
 
   if (state.context?.tps) {
     if (tpsEl) tpsEl.hidden = false
-    document.getElementById('tps-value').textContent = state.context.tps
+    const tpsValue = document.getElementById('tps-value')
+    if (tpsValue) tpsValue.textContent = state.context.tps
   } else {
     if (tpsEl) tpsEl.hidden = true
   }

@@ -332,7 +332,7 @@
                    (acp.mjs:155-160), mcode 实际仍用旧 model 跑
                    唯一能真切的路径: mcode exec (MCODE_USE_ACP=0) — runMcodeExec 真把 --model 透传给子进程
                    想临时恢复: 把下面 btn-model 标签的 hidden 去掉即可, server /api/set-model 端点没动 -->
-              <button class="btn-tool" id="btn-model" title="mcode 0.1.5 acp 不支持 mid-session 改 model (实测 probe); 按钮已隐藏" hidden>
+              <button class="btn-tool" id="btn-model" title="点击查看/切换模型（仅 Exec 模式支持切换）">
                 <span id="model-label">—</span>
                 <svg class="icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
               </button>
