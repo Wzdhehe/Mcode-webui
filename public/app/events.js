@@ -834,7 +834,7 @@ export function attachEvents() {
         showToast(t('workspace_locked_in_chat'))
         return
       }
-      openWsQuickPicker()
+      openWsPicker()  // 打开完整的 workspace-picker（含搜索框 + 创建/打开新空间按钮）
     })
   }
 
