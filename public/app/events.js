@@ -705,21 +705,23 @@ export function attachEvents() {
   function wsRenderRecent(items) {
     if (!wsRecentList) return
     if (!items || items.length === 0) {
-      wsRecentList.innerHTML = '<div class="ws-recent-empty">暂无最近工作区</div>'
+      wsRecentList.innerHTML = '<div class="ws-picker-recent-empty">暂无最近工作区</div>'
       return
     }
     const cur = (state && state.workspace && state.workspace.dir) || ''
+    const folderIcon = `<svg class="ws-picker-recent-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`
     wsRecentList.innerHTML = items.map(item => {
       const active = item.dir === cur ? ' active' : ''
       const name = wsShortName(item.dir) || item.dir
-      const count = item.count > 0 ? `<span class="ws-recent-count">${item.count}</span>` : ''
-      return `<div class="ws-recent-item${active}" data-dir="${escapeHtml(item.dir)}" title="${escapeHtml(item.dir)}">
-        <span class="ws-recent-name">${escapeHtml(name)}</span>${count}
+      const count = item.count > 0 ? `<span class="ws-picker-recent-count">${item.count}</span>` : ''
+      return `<div class="ws-picker-recent-item${active}" data-dir="${escapeHtml(item.dir)}" title="${escapeHtml(item.dir)}">
+        ${folderIcon}
+        <span class="ws-picker-recent-name">${escapeHtml(name)}</span>${count}
       </div>`
     }).join('')
 
     // 点击即切换
-    wsRecentList.querySelectorAll('.ws-recent-item').forEach(el => {
+    wsRecentList.querySelectorAll('.ws-picker-recent-item').forEach(el => {
       el.addEventListener('click', () => {
         const dir = el.dataset.dir
         wsPicker.hidden = true
@@ -740,7 +742,7 @@ export function attachEvents() {
       }
     } catch (e) {
       console.error('[ws] load recent failed', e)
-      if (wsRecentList) wsRecentList.innerHTML = '<div class="ws-recent-empty">加载失败</div>'
+      if (wsRecentList) wsRecentList.innerHTML = '<div class="ws-picker-recent-empty">加载失败</div>'
     }
   }
 

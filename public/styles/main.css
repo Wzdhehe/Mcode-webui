@@ -314,6 +314,7 @@ a.chip-lan-link .icon {
 }
 
 /* v0.5.al: workspace picker popover（fixed 定位，跟随 chip-workspace） */
+/* v2.1 (feat-workspace-lhl): 美化样式 */
 .workspace-picker {
   position: fixed;
   width: 360px;
@@ -323,12 +324,24 @@ a.chip-lan-link .icon {
   overflow-y: auto;
   background: var(--bg-elevated, #fff);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.22), 0 4px 12px rgba(0,0,0,0.1);
   z-index: 200;
+  animation: picker-enter 0.18s ease-out;
 }
-.workspace-picker-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text); }
+
+@keyframes picker-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.workspace-picker-title { font-size: 15px; font-weight: 600; margin-bottom: 14px; color: var(--text); letter-spacing: -0.01em; }
 .workspace-picker-current {
   font-size: 11px; color: var(--text-tertiary); margin-bottom: 10px;
   padding: 6px 8px; background: var(--bg-input, var(--bg)); border-radius: 6px;
@@ -345,13 +358,36 @@ a.chip-lan-link .icon {
   display: flex; gap: 6px; margin-top: 10px;
 }
 .btn-workspace-action {
-  flex: 1; padding: 6px 8px; background: transparent; border: 1px solid var(--border);
-  border-radius: 6px; color: var(--text-secondary); font-size: 12px; cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  flex: 1; padding: 10px 14px; background: transparent; border: 1px solid var(--border);
+  border-radius: 10px; color: var(--text-secondary); font-size: 13px; cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 500;
 }
-.btn-workspace-action:hover { background: var(--bg-hover, rgba(0,0,0,0.04)); border-color: var(--accent); color: var(--text); }
-.btn-workspace-action.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
-.btn-workspace-action.primary:hover { background: var(--accent-hover, #ffffff); }
+.btn-workspace-action:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.btn-workspace-action:active {
+  transform: scale(0.98);
+}
+.btn-workspace-action.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.btn-workspace-action.primary:hover {
+  background: var(--accent-hover);
+}
+.btn-workspace-action svg {
+  width: 16px;
+  height: 16px;
+}
 .workspace-picker-sync {
   display: flex; align-items: center; gap: 6px; margin-top: 10px;
   font-size: 11px; color: var(--text-tertiary); cursor: pointer;
@@ -370,71 +406,102 @@ a.chip-lan-link .icon {
 .workspace-picker-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 10px; }
 
 /* v2 (feat-workspace-lhl): 搜索 + recent 列表 + 原生 picker */
+/* v2.1 美化样式 */
 .ws-picker-search-wrap {
   position: relative;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 .ws-picker-search-icon {
   position: absolute;
-  left: 9px;
+  left: 11px;
   top: 50%;
   transform: translateY(-50%);
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   color: var(--text-tertiary);
   pointer-events: none;
 }
 .ws-picker-search {
   width: 100%;
-  padding: 7px 10px 7px 30px;
+  padding: 10px 12px 10px 36px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 10px;
   background: var(--bg-input, var(--bg));
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
   box-sizing: border-box;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.ws-picker-search:focus { outline: none; border-color: var(--accent); }
+.ws-picker-search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
 .ws-picker-search::placeholder { color: var(--text-tertiary); }
 
 .ws-picker-recent-list {
   max-height: 240px;
   overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
   background: var(--bg);
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
-.ws-picker-recent-loading {
-  padding: 16px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-tertiary);
+
+/* 自定义滚动条 */
+.ws-picker-recent-list::-webkit-scrollbar {
+  width: 5px;
 }
+.ws-picker-recent-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ws-picker-recent-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.ws-picker-recent-list::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+.ws-picker-recent-loading,
 .ws-picker-recent-empty {
-  padding: 16px;
+  padding: 20px;
   text-align: center;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-tertiary);
 }
 .ws-picker-recent-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
+  gap: 10px;
+  padding: 10px 12px;
   cursor: pointer;
   font-size: 13px;
-  color: var(--text-secondary);
-  transition: background 0.1s;
-  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  transition: background 0.12s;
+  border-bottom: 1px solid var(--border-light);
 }
 .ws-picker-recent-item:last-child { border-bottom: none; }
-.ws-picker-recent-item:hover { background: var(--bg-hover); color: var(--text); }
+.ws-picker-recent-item:hover { background: var(--bg-hover); }
 .ws-picker-recent-item.active {
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-  color: var(--primary);
-  font-weight: 600;
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  font-weight: 500;
 }
+
+.ws-picker-recent-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  opacity: 0.6;
+}
+.ws-picker-recent-item:hover .ws-picker-recent-icon,
+.ws-picker-recent-item.active .ws-picker-recent-icon {
+  color: var(--accent);
+  opacity: 1;
+}
+
 .ws-picker-recent-name {
   flex: 1;
   overflow: hidden;
@@ -444,6 +511,10 @@ a.chip-lan-link .icon {
 .ws-picker-recent-count {
   font-size: 11px;
   color: var(--text-tertiary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 2px 8px;
   flex-shrink: 0;
 }
 .ws-picker-divider {
