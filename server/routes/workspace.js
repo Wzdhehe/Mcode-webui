@@ -123,12 +123,14 @@ export function handleWorkspaceResolve(req, res, _ctx) {
 // v2 (feat-workspace-lhl): GET /api/workspace/recent
 //   返回最近工作区列表（后端 DB 模糊搜索）。
 //   ?search= 模糊匹配路径（可空）；?limit= 最大条数（默认 5，上限 20）
-//   响应: { ok, items: [{dir, name, lastActiveAt, sessionCount}], total, search, limit }
+//   响应: { ok, items: [{dir, name, lastActiveAt, sessionCount}], total, search, limit, tmpDir }
 export function handleWorkspaceRecent(req, res, _ctx) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const search = url.searchParams.get("search") || "";
   const limit = Number(url.searchParams.get("limit")) || 5;
   const result = getRecentWorkspaces({ search, limit });
+  // 添加 tmpDir，供「无需工作空间」按钮使用
+  result.tmpDir = tmpdir();
   res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
   return res.end(JSON.stringify(result));
 }
