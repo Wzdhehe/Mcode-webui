@@ -5,6 +5,8 @@
 
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
+// v1.2 (feat-workspace-lhl): 零弹窗目录选择（webkitdirectory input，见 native-fs.js）
+import { pickDirectory } from './native-fs.js'
 import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, clearAlerts, closeApiKeyModal, connect, es, getGeneralQuota, getPendingAuthRequests, leftOpen, markAllAlertsRead, openApiKeyModal, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setLeftOpen, setRightOpen, setSearchQuery, setSidebarReady, setState, state, submitAuthDecision, toggleUsagePopover, tokenParam, urlParams } from './state.js'
 import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, AUTH_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAlerts, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderLanCardContent, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
 
@@ -653,51 +655,32 @@ export function attachEvents() {
     }
   })
 
-  // v0.5.al: workspace 切换 — chip-workspace click 弹 popover
+  // v1.2 (feat-workspace-lhl) 重排: 标题 → 工作区下拉（选项来自 sessions/DB）
+  //   → 底部左「浏览目录」右「无需工作空间」(= 系统临时目录)
   const wsPicker = document.getElementById('workspace-picker')
+  const wsSelect = document.getElementById('workspace-picker-select')
   const wsInput = document.getElementById('workspace-picker-input')
-  const wsCurrent = document.getElementById('workspace-picker-current')
   const wsChip = document.getElementById('chip-workspace')
-  const wsRecentsEl = document.getElementById('workspace-picker-recents')
-  const wsRecentsList = document.getElementById('workspace-picker-recents-list')
   const wsSyncCheckbox = document.getElementById('workspace-picker-sync')
+  const wsBrowseBtn = document.getElementById('workspace-picker-browse-btn')
+  const wsNoWsBtn = document.getElementById('workspace-picker-nows-btn')
+  const wsNativeCands = document.getElementById('workspace-picker-native-candidates')
 
-  // localStorage 工具：保存/读取 recents
-  const WS_RECENTS_KEY = 'webui_workspace_recents_v1'
+  // v1.2 (feat-workspace-lhl): 目录选择共用工具 — chip 弹层和「浏览目录」都用。
+  // v1.3: 底层为零弹窗 webkitdirectory input（见 native-fs.js 头注释）。
+  // 浏览器侧拿不到绝对路径（webkitdirectory 只报相对路径），把文件夹名交给
+  // /api/workspace/resolve 在服务端常见根目录里搜候选，用户确认后使用。
+  async function resolveDirCandidates(folderName) {
+    const url = '/api/workspace/resolve' + API_SUFFIX + '&name=' + encodeURIComponent(folderName)
+    const r = await fetch(url, { headers: HEADERS })
+    const data = await r.json()
+    if (!data || !data.ok) throw new Error((data && data.error) || 'resolve failed')
+    return data // { ok, name, platform, home, candidates: [{path, via}] }
+  }
+
+  // v1.2: recents 列表 UI 已删 — 下拉选项直接来自 /api/workspace/tree（sessions DB），
+  //   比 localStorage recents 更全且跨 tab 一致。WS_LAST_KEY 保留（启动时恢复上次工作区）。
   const WS_LAST_KEY = 'webui_workspace_last_v1'
-  function loadWsRecents() {
-    try { return JSON.parse(localStorage.getItem(WS_RECENTS_KEY) || '[]') } catch { return [] }
-  }
-  function saveWsRecents(arr) {
-    try { localStorage.setItem(WS_RECENTS_KEY, JSON.stringify(arr.slice(0, 5))) } catch {}
-  }
-  function pushWsRecent(dir) {
-    if (!dir) return
-    const cur = loadWsRecents().filter(d => d !== dir)
-    cur.unshift(dir)
-    saveWsRecents(cur)
-  }
-  function renderWsRecents() {
-    const recents = loadWsRecents()
-    if (recents.length === 0) {
-      wsRecentsEl.hidden = true
-      return
-    }
-    wsRecentsEl.hidden = false
-    wsRecentsList.innerHTML = ''
-    for (const dir of recents) {
-      const btn = document.createElement('div')
-      btn.className = 'workspace-picker-recent'
-      btn.textContent = dir
-      btn.title = dir
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation()
-        wsInput.value = dir
-        submitWorkspaceChange({ dir })
-      })
-      wsRecentsList.appendChild(btn)
-    }
-  }
 
   function positionWsPicker() {
     // v0.5.bg: 用户反馈"显示不全" — 改成屏幕居中显示（fixed + 50% translate），不再跟 chip
@@ -718,10 +701,10 @@ export function attachEvents() {
       const data = await r.json()
       if (data.ok) {
         if (payload && payload.dir) {
-          pushWsRecent(data.workspace.dir)
           try { localStorage.setItem(WS_LAST_KEY, data.workspace.dir) } catch {}
         }
         wsPicker.hidden = true
+        hideWsQuickPicker()
         // server 会 push state，render() 自动更新 chip + 输入区
         // 立即本地 fallback（不等 SSE）
         if (state) {
@@ -742,7 +725,7 @@ export function attachEvents() {
     openWsPicker()
   })
 
-  // v0.5.ax: 欢迎页的工作区 chip 也触发同样的 popover
+  // v0.5.ax: 欢迎页的工作区 chip 触发锚定下拉（v1.2: 参考 MiniMax Agent 设计）
   const emptyWsBtn = document.getElementById('chat-empty-workspace')
   if (emptyWsBtn) {
     emptyWsBtn.addEventListener('click', (e) => {
@@ -753,36 +736,54 @@ export function attachEvents() {
         showToast(t('workspace_locked_in_chat'))
         return
       }
-      openWsPicker()
+      openWsQuickPicker()
     })
   }
 
+  // v1.2: 下拉选项数据 — 优先 /api/workspace/tree（sessions DB），失败退回本地 state。
+  //   tmpDir 缓存供「无需工作空间」按钮使用（os.tmpdir(): linux /tmp,
+  //   macOS /var/folders/..., win32 %TEMP%）。
+  let wsTmpDir = ''
+  let wsHome = ''
+  function wsOptionsFromState(currentWs) {
+    const set = new Set()
+    if (currentWs) set.add(currentWs)
+    ;(state && state.sessions || []).forEach(s => { if (s.workspace) set.add(s.workspace) })
+    return [...set]
+  }
+  function renderWsSelectOptions(dirs, currentWs) {
+    if (!wsSelect) return
+    const list = dirs.length > 0 ? dirs : (currentWs ? [currentWs] : [])
+    wsSelect.innerHTML = list.map(ws => {
+      const count = (state.sessions || []).filter(s => s.workspace === ws).length
+      const label = (wsShortName(ws) || ws) + (count > 0 ? `  (${count})` : '')
+      return `<option value="${escapeHtml(ws)}" title="${escapeHtml(ws)}"${ws === currentWs ? ' selected' : ''}>${escapeHtml(label)}</option>`
+    }).join('')
+  }
   function openWsPicker() {
     const wasHidden = wsPicker.hidden
     // 关掉其他 popover
     document.querySelectorAll('.mode-popover, .settings-menu, .model-picker, .workspace-picker').forEach(el => { if (el !== wsPicker) el.hidden = true })
+    hideWsQuickPicker()
     wsPicker.hidden = !wasHidden
     if (!wsPicker.hidden) {
-      // 显示当前工作区全路径
       const cur = (state && state.workspace && state.workspace.dir) || ''
-      wsCurrent.textContent = cur || t('workspace_unset')
-      wsInput.value = cur
-      renderWsRecents()
-      // 探测 TUI cwd，让 "跟随 TUI" 按钮显示真实路径（tooltip）
-      fetch('/api/workspace' + API_SUFFIX, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...HEADERS },
-        body: JSON.stringify({ action: 'detect' }),
-      }).then(r => r.json()).then(data => {
-        if (data && data.tuiCwd) {
-          const tuiBtn = document.getElementById('workspace-picker-tui')
-          if (tuiBtn) tuiBtn.title = 'mcode TUI 当前在: ' + data.tuiCwd
-        }
+      // 先用本地已知工作区立即渲染下拉（无闪烁），再用后端树覆盖
+      renderWsSelectOptions(wsOptionsFromState(cur), cur)
+      fetchWorkspaceTree().then(tree => {
+        if (wsPicker.hidden) return
+        wsTmpDir = tree.tmpDir || wsTmpDir
+        wsHome = tree.home || wsHome
+        const dirs = (tree.workspaces || []).map(g => g.dir)
+        if (cur && !dirs.includes(cur)) dirs.unshift(cur)
+        renderWsSelectOptions(dirs, cur)
       }).catch(() => {})
+      // 关掉可能开着的候选区/目录树
+      if (wsNativeCands) { wsNativeCands.hidden = true; wsNativeCands.innerHTML = '' }
+      if (browsePanel) browsePanel.hidden = true
       setTimeout(() => {
         positionWsPicker()
-        wsInput.focus()
-        wsInput.select()
+        if (wsSelect) wsSelect.focus()
       }, 0)
     }
   }
@@ -800,8 +801,175 @@ export function attachEvents() {
     }
   })
 
+  // 下拉选择即切换
+  wsSelect.addEventListener('change', () => {
+    const dir = wsSelect.value
+    if (dir) submitWorkspaceChange({ dir, syncTui: wsSyncCheckbox.checked })
+  })
+
   // v0.5.by: 3 按钮 (workspace-picker-confirm/tui/reset) HTML 已删 — Enter 键提交已覆盖
   //   (见上方 wsInput.addEventListener('keydown') Enter 分支)
+
+  // v1.2 (feat-workspace-lhl): wsPicker 自身 Escape 关闭
+  wsPicker.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); wsPicker.hidden = true }
+  })
+
+  // v1.2: 底部按钮 — 浏览目录（webkitdirectory 零弹窗）
+  wsBrowseBtn.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    await nativePickAndSubmit()
+  })
+
+  // v1.2: 底部按钮 — 无需工作空间（os.tmpdir）
+  wsNoWsBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const tmp = wsTmpDir || ''
+    if (!tmp) { showToast(t('ws_nows_unavailable') || '临时目录不可用'); return }
+    submitWorkspaceChange({ dir: tmp, syncTui: wsSyncCheckbox.checked })
+  })
+
+  // v1.2: 零弹窗目录选择 → resolve → 唯一直接提交 / 多候选内联点选 / 无候选降级内置目录树
+  async function nativePickAndSubmit() {
+    const folderName = await pickDirectory()
+    if (!folderName) return  // 用户取消
+    try {
+      const data = await resolveDirCandidates(folderName)
+      const cands = data.candidates || []
+      wsTmpDir = data.tmpDir || wsTmpDir
+      if (cands.length === 0) {
+        // 无候选 → 降级：打开内置目录树
+        showToast(t('native_candidates_none') || '未找到匹配目录，已打开目录树', 3000)
+        if (browseToggle) browseToggle.click()
+        return
+      }
+      if (cands.length === 1) {
+        // 唯一候选：直接提交（锚点手势直接触发流程）
+        submitWorkspaceChange({ dir: cands[0].path, syncTui: wsSyncCheckbox.checked })
+        return
+      }
+      // 多候选：内联点选
+      if (wsNativeCands) {
+        wsNativeCands.hidden = false
+        wsNativeCands.innerHTML = `
+          <div class="ws-native-candidates-title">${escapeHtml(t('native_candidates_title') || '找到多个匹配目录：')}</div>
+          ${cands.map(c => `
+            <button class="ws-native-cand-btn" data-path="${escapeHtml(c.path)}">
+              <span class="ws-native-cand-name">${escapeHtml(c.via)}</span>
+              <span class="ws-native-cand-path">${escapeHtml(c.path)}</span>
+            </button>`).join('')}
+        `
+        wsNativeCands.querySelectorAll('.ws-native-cand-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const path = btn.dataset.path
+            wsNativeCands.hidden = true
+            wsNativeCands.innerHTML = ''
+            submitWorkspaceChange({ dir: path, syncTui: wsSyncCheckbox.checked })
+          })
+        })
+      }
+    } catch (err) {
+      console.error('[ws] native pick failed', err)
+      showToast(t('native_picked_fill') || '目录选择失败，请尝试手动输入路径', 3000)
+      // 降级：打开内置目录树
+      if (browseToggle) browseToggle.click()
+    }
+  }
+
+  // v1.2: fetchWorkspaceTree — 缓存在 wsTreeCache，首次 openWsPicker 时预取
+  let wsTreeCache = null
+  let wsQuickList = null  // quick picker DOM ref（懒创建）
+  async function fetchWorkspaceTree() {
+    if (wsTreeCache) return wsTreeCache
+    try {
+      const r = await fetch('/api/workspace/tree' + API_SUFFIX, { headers: HEADERS })
+      const data = await r.json()
+      if (data && data.ok) {
+        wsTreeCache = data
+        return data
+      }
+    } catch {}
+    return null
+  }
+
+  // v1.2: welcome 页 chip 锚定下拉（openWsQuickPicker）
+  function openWsQuickPicker() {
+    // 首次创建 DOM
+    if (!wsQuickList) {
+      wsQuickList = document.createElement('div')
+      wsQuickList.id = 'ws-quick-list'
+      wsQuickList.hidden = true
+      document.body.appendChild(wsQuickList)
+    }
+    const picker = wsQuickList
+    // 定位：相对于 emptyWsBtn
+    const anchor = emptyWsBtn
+    if (!anchor) return
+
+    const rect = anchor.getBoundingClientRect()
+    picker.style.top = (rect.bottom + window.scrollY + 4) + 'px'
+    picker.style.left = (rect.left + window.scrollX) + 'px'
+
+    // 渲染内容：加载中 → 填充数据
+    picker.innerHTML = '<div class="ws-quick-loading">…</div>'
+    picker.hidden = false
+
+    fetchWorkspaceTree().then(tree => {
+      if (picker.hidden) return
+      wsTmpDir = (tree && tree.tmpDir) || wsTmpDir
+      const workspaces = (tree && tree.workspaces) || []
+      const cur = (state && state.workspace && state.workspace.dir) || ''
+      let html = ''
+      if (workspaces.length > 0) {
+        workspaces.forEach(g => {
+          const active = g.dir === cur ? ' active' : ''
+          html += `<div class="ws-quick-item${active}" data-dir="${escapeHtml(g.dir)}">
+            <span class="ws-quick-name">${escapeHtml(wsShortName(g.dir) || g.dir)}</span>
+            <span class="ws-quick-count">${g.count || 0}</span>
+          </div>`
+        })
+      } else {
+        html += `<div class="ws-quick-empty">${escapeHtml(t('no_workspaces') || '暂无工作区')}</div>`
+      }
+      html += `<div class="ws-quick-add" id="ws-quick-add-btn">＋ ${escapeHtml(t('ws_add') || '添加工作区…')}</div>`
+      picker.innerHTML = html
+
+      // 点击已有工作区 = 切换
+      picker.querySelectorAll('.ws-quick-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const dir = item.dataset.dir
+          hideWsQuickPicker()
+          submitWorkspaceChange({ dir, syncTui: false })
+        })
+      })
+
+      // 点击「添加工作区」= 打开 wsPicker（触发浏览）
+      const addBtn = document.getElementById('ws-quick-add-btn')
+      if (addBtn) {
+        addBtn.addEventListener('click', (e) => {
+          e.stopPropagation()
+          hideWsQuickPicker()
+          openWsPicker()
+          // 自动触发浏览目录流程
+          setTimeout(() => { if (wsBrowseBtn) wsBrowseBtn.click() }, 80)
+        })
+      }
+    }).catch(() => {
+      if (!picker.hidden) picker.innerHTML = '<div class="ws-quick-empty">加载失败</div>'
+    })
+  }
+
+  function hideWsQuickPicker() {
+    if (wsQuickList) wsQuickList.hidden = true
+  }
+
+  // 点击 quick picker 外部关闭
+  document.addEventListener('click', (e) => {
+    if (wsQuickList && !wsQuickList.hidden && !wsQuickList.contains(e.target)) {
+      const anchor = emptyWsBtn
+      if (!anchor || !anchor.contains(e.target)) hideWsQuickPicker()
+    }
+  })
 
   // v0.5.am: 可视化目录树浏览（懒加载）
   const browseToggle = document.getElementById('workspace-picker-browse-toggle')

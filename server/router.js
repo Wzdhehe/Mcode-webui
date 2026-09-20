@@ -234,6 +234,17 @@ const ROUTES = [
     match: (p) => p === "/api/workspace/browse",
     handler: workspaceRoute.handleWorkspaceBrowse,
   },
+  // v1.2 (feat-workspace-lhl): 工作区→会话树 + 文件夹名解析候选
+  {
+    method: "GET",
+    match: (p) => p === "/api/workspace/tree",
+    handler: workspaceRoute.handleWorkspaceTree,
+  },
+  {
+    method: "GET",
+    match: (p) => p === "/api/workspace/resolve",
+    handler: workspaceRoute.handleWorkspaceResolve,
+  },
 
   // Settings
   {

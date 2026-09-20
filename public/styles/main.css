@@ -3453,3 +3453,173 @@ button.chip-alerts .icon { width: 14px; height: 14px; display: block; }
   font-size: 11px;
   color: var(--text-tertiary);
 }
+
+/* ============================================================
+   v1.2 (feat-workspace-lhl): 工作区零弹窗选择 + quick picker
+   ============================================================ */
+
+/* Switch Workspace 弹层 */
+.workspace-picker-input {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.workspace-picker-actions-row {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+
+.workspace-picker-actions-row.split {
+  justify-content: space-between;
+}
+
+.btn-workspace-action {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-workspace-action:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+/* 零弹窗候选确认区 */
+.ws-native-candidates {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.ws-native-candidates-title {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+}
+
+.ws-native-cand-btn {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  gap: 2px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ws-native-cand-btn:last-child { margin-bottom: 0; }
+
+.ws-native-cand-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.ws-native-cand-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.ws-native-cand-path {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  word-break: break-all;
+}
+
+/* Quick picker 下拉（welcome 页 chip 锚定） */
+#ws-quick-list {
+  position: absolute;
+  z-index: 1000;
+  min-width: 260px;
+  max-width: 380px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 6px 0;
+  overflow: hidden;
+}
+
+.ws-quick-loading,
+.ws-quick-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.ws-quick-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  gap: 8px;
+  transition: background 0.12s;
+}
+
+.ws-quick-item:hover { background: var(--bg-hover); }
+
+.ws-quick-item.active {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.ws-quick-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-quick-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-base);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 1px 7px;
+  flex-shrink: 0;
+}
+
+.ws-quick-add {
+  padding: 9px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--primary);
+  border-top: 1px solid var(--border-light);
+  margin-top: 4px;
+  transition: background 0.12s;
+}
+
+.ws-quick-add:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); }

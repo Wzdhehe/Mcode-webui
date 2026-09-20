@@ -379,35 +379,32 @@
                 <button class="btn-cancel" id="model-picker-cancel" data-i18n="cancel">取消</button>
               </div>
             </div>
-            <!-- v0.5.al: workspace picker popover（chip-workspace 点击弹出） -->
+            <!-- v0.5.al: workspace picker popover（chip-workspace 点击弹出）
+                 v1.2 重排 (feat-workspace-lhl): 标题 → 工作区下拉（sessions DB tree）
+                 → sync 勾选 → 候选确认区 → 底部按钮排（浏览目录 | 无需工作空间）
+                 → 降级目录树面板。手输路径输入框与 recents 已删。 -->
             <div class="workspace-picker" id="workspace-picker" hidden>
               <div class="workspace-picker-title" data-i18n="workspace_picker_title">切换工作区</div>
-              <div class="workspace-picker-current" id="workspace-picker-current">—</div>
-              <input class="workspace-picker-input" id="workspace-picker-input" placeholder="C:\Users\your-name\project-path" />
-              <!-- v0.5.by: Switch/Use TUI/Reset 三按钮删除 (Wzdhehe 反馈 不需要)
-                   想换工作区直接输路径 + 回车 即可 -->
+              <select class="workspace-picker-select" id="workspace-picker-select"></select>
+              <input type="text" id="workspace-picker-input" class="workspace-picker-input"
+                     placeholder="或直接输入路径后按 Enter…" />
               <label class="workspace-picker-sync">
                 <input type="checkbox" id="workspace-picker-sync" />
                 <span data-i18n="workspace_sync_tui">Also update mcode TUI's cwd (write cwd.json)</span>
               </label>
-              <div class="workspace-picker-recents" id="workspace-picker-recents" hidden>
-                <div class="workspace-picker-recents-title" data-i18n="workspace_recents_title">最近使用</div>
-                <div class="workspace-picker-recents-list" id="workspace-picker-recents-list"></div>
+              <!-- 目录选择多候选/无候选时的内联确认区 -->
+              <div class="ws-native-candidates" id="workspace-picker-native-candidates" hidden></div>
+              <div class="workspace-picker-actions-row split">
+                <button class="btn-workspace-action" id="workspace-picker-browse-btn" data-i18n="ws_browse_btn">浏览目录…</button>
+                <button class="btn-workspace-action" id="workspace-picker-nows-btn" data-i18n="ws_nows_btn">无需工作空间</button>
               </div>
-              <!-- v0.5.am: 可视化目录树浏览（懒加载） -->
-              <div class="workspace-picker-browse">
-                <button class="workspace-picker-browse-toggle" id="workspace-picker-browse-toggle">
-                  <span class="workspace-picker-browse-chevron" id="workspace-picker-browse-chevron">▶</span>
-                  <span data-i18n="workspace_browse">浏览目录…</span>
-                </button>
-                <div class="workspace-picker-browse-panel" id="workspace-picker-browse-panel" hidden>
-                  <div class="workspace-picker-breadcrumb" id="workspace-picker-breadcrumb"></div>
-                  <div class="workspace-picker-tree" id="workspace-picker-tree">
-                    <div class="workspace-picker-tree-loading" id="workspace-picker-tree-loading" data-i18n="workspace_loading">加载中…</div>
-                  </div>
+              <!-- v0.5.am: 可视化目录树浏览（懒加载）— 目录选择无候选时的降级 -->
+              <div class="workspace-picker-browse-panel" id="workspace-picker-browse-panel" hidden>
+                <div class="workspace-picker-breadcrumb" id="workspace-picker-breadcrumb"></div>
+                <div class="workspace-picker-tree" id="workspace-picker-tree">
+                  <div class="workspace-picker-tree-loading" id="workspace-picker-tree-loading" data-i18n="workspace_loading">加载中…</div>
                 </div>
               </div>
-              <div class="workspace-picker-hint" data-i18n="workspace_picker_hint">回车切换 · Esc 关闭</div>
             </div>
           </div>
           <!-- v0.5.bc: 工作区 chip 从欢迎页挪到输入框下面（独立一行，左对齐，仿 kimi） -->
@@ -418,6 +415,12 @@
               <span id="chat-empty-ws-text">…</span>
               <svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
+            <!-- v1.2 (feat-workspace-lhl): chip 锚定下拉 — 文件夹列表（当前项打勾）
+                 + 底部「＋ 添加工作区…」（零弹窗目录选择）。向上弹出，顶部不够时向下。 -->
+            <div class="ws-quick-picker" id="ws-quick-picker" hidden>
+              <div class="ws-quick-list" id="ws-quick-list"></div>
+              <button class="ws-quick-add" id="ws-quick-add">＋ <span data-i18n="ws_quick_add">添加工作区…</span></button>
+            </div>
           </div>
           <div class="input-hint" id="input-hint">
             <span data-i18n="hint_footer">/ 命令 · @ 文件 · Ctrl+V 粘贴图片 · Enter 发送</span>
@@ -510,18 +513,8 @@
     <div class="slash-results" id="slash-results"></div>
   </div>
 
-  <!-- v0.5.ar: 新建会话 - 工作区选择 popover（点"新建会话"按钮弹） -->
-  <div class="ws-picker-popover" id="new-chat-ws-picker" hidden>
-    <div class="ws-picker-title" data-i18n="workspace_picker_select">选择工作区</div>
-    <div class="ws-picker-current"><span data-i18n="workspace_picker_current">当前：</span><code id="new-chat-current-ws">—</code></div>
-    <div class="ws-picker-list" id="new-chat-ws-list">
-      <!-- 动态渲染已知 workspace -->
-    </div>
-    <div class="ws-picker-actions-row">
-      <button class="btn-workspace-action" id="new-chat-ws-other">Other path…</button>
-      <button class="btn-workspace-action primary" id="new-chat-ws-cancel" data-i18n="cancel">取消</button>
-    </div>
-  </div>
+  <!-- v0.5.bx-33 (v1.2 清理): 旧 new-chat-ws-picker 已删 — 新建会话直接回
+       welcome 态，工作区用输入框下方 chip 的锚定下拉选（见 input-workspace-row）。 -->
 
   <!-- v0.5.bf: mode popover 已移入 input-box 内部（避免 welcome 时定位错位） -->
 

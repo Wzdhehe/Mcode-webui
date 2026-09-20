@@ -175,6 +175,13 @@ const I18N = {
     workspace_reset: '恢复 webui 启动时检测到的默认工作区',
     workspace_locked_in_chat: '对话已开始，工作区已锁定。点击左侧「新建会话」可重新选择工作区。',
     workspace_picker_hint: '点击选择工作区',
+    // v1.2 (feat-workspace-lhl): 零弹窗目录选择 i18n
+    native_candidates_title: '找到多个匹配目录：',
+    native_candidates_none: '未找到匹配目录，已打开目录树',
+    native_picked_fill: '目录选择失败，请尝试手动输入路径',
+    ws_nows_btn: '无需工作空间',
+    ws_nows_unavailable: '临时目录不可用',
+    ws_add: '添加工作区…',
     // v0.5.bx-8: ask_user 工具 (mcode 0.1.4 ask_user) — 学 mavis 桌面端弹窗布局文案
     ask_user_other_placeholder: '其他...',
     ask_user_clear: '清空',
@@ -427,6 +434,13 @@ const I18N = {
     workspace_reset: 'Reset to default workspace detected at startup',
     workspace_locked_in_chat: 'Chat already started — workspace locked. Click "New Chat" in the sidebar to pick a new workspace.',
     workspace_picker_hint: 'Click to select workspace',
+    // v1.2 (feat-workspace-lhl): zero-dialog directory selection i18n
+    native_candidates_title: 'Multiple matching directories found:',
+    native_candidates_none: 'No matching directory found — opened built-in tree',
+    native_picked_fill: 'Directory selection failed, try entering the path manually',
+    ws_nows_btn: 'No workspace needed',
+    ws_nows_unavailable: 'Temporary directory unavailable',
+    ws_add: 'Add workspace…',
     // v0.5.bx-8: ask_user 工具 (mcode 0.1.4 ask_user) — 学 mavis 桌面端弹窗布局文案
     ask_user_other_placeholder: 'Other...',
     ask_user_clear: 'Clear',
