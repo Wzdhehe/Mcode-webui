@@ -5,8 +5,9 @@
 
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
-// v1.2 (feat-workspace-lhl): 零弹窗目录选择（webkitdirectory input，见 native-fs.js）
+// v2.0 (feat-workspace-lhl): 零弹窗目录选择（showDirectoryPicker 优先，webkitdirectory 回退）
 import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, clearAlerts, closeApiKeyModal, connect, es, getGeneralQuota, getPendingAuthRequests, leftOpen, markAllAlertsRead, openApiKeyModal, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setLeftOpen, setRightOpen, setSearchQuery, setSidebarReady, setState, state, submitAuthDecision, toggleUsagePopover, tokenParam, urlParams } from './state.js'
+import { pickDirectory } from './native-fs.js'
 import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, AUTH_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAlerts, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderLanCardContent, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
 
 export let slashOpen = false
@@ -788,31 +789,54 @@ export function attachEvents() {
     if (e.key === 'Escape') { e.stopPropagation(); wsPicker.hidden = true }
   })
 
-  // ---- 创建或打开新空间 → 原生 picker ----
+  // ---- 创建或打开新空间 → showDirectoryPicker (Chromium) / webkitdirectory 回退 ----
   wsCreateBtn?.addEventListener('click', async (e) => {
     e.stopPropagation()
-    try {
-      const r = await fetch('/api/workspace/pick' + API_SUFFIX, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...HEADERS },
-      })
-      const data = await r.json()
-      if (data && data.ok && data.path) {
-        wsPicker.hidden = true
-        submitWorkspaceChange({ dir: data.path, syncTui: false })
-      } else {
-        // 用户取消（path 为空字符串）或异常
-        if (data && data.path === '') {
-          // 取消，不做操作
-        } else {
-          showToast(data?.error || '目录选择失败', 3000)
-        }
+    wsPicker.hidden = true
+
+    const result = await pickDirectory()
+    if (!result.ok) {
+      if (result.reason === 'cancel') return
+      if (result.reason === 'multiple' && result.candidates) {
+        _showWorkspaceCandidates(result.candidates)
+        return
       }
-    } catch (err) {
-      console.error('[ws] pick failed', err)
-      showToast('目录选择失败: ' + err.message, 3000)
+      showToast(result.error || '目录选择失败', 3000)
+      return
     }
+
+    // showDirectoryPicker 直接返回绝对路径
+    submitWorkspaceChange({ dir: result.dir, syncTui: false })
   })
+
+  // ---- 多候选选择层 ----
+  function _showWorkspaceCandidates(candidates) {
+    // 先关闭主 picker，打开候选列表弹层（复用 wsPicker 区域）
+    const listEl = document.getElementById('ws-picker-recent-list')
+    if (!listEl) return
+    listEl.innerHTML = '<div class="ws-picker-recent-title" style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px">找到多个同名目录，选择一个：</div>'
+    candidates.forEach(c => {
+      const div = document.createElement('div')
+      div.className = 'ws-picker-recent-item'
+      div.style.cssText = 'padding:8px 10px;cursor:pointer;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px'
+      div.innerHTML = `<span>📁</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(c.path)}">${escapeHtml(c.path)}</span>`
+      div.addEventListener('click', () => {
+        submitWorkspaceChange({ dir: c.path, syncTui: false })
+      })
+      listEl.appendChild(div)
+    })
+    // 添加取消按钮
+    const cancelBtn = document.createElement('button')
+    cancelBtn.textContent = '取消'
+    cancelBtn.style.cssText = 'margin-top:8px;width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--text)'
+    cancelBtn.addEventListener('click', () => {
+      listEl.innerHTML = '<div class="ws-picker-recent-loading">…</div>'
+      wsLoadRecent('')
+    })
+    listEl.appendChild(cancelBtn)
+    // 打开 picker 显示候选
+    wsPicker.hidden = false
+  }
 
   // ---- 无需工作空间 → 临时目录 ----
   wsNoWsBtn?.addEventListener('click', (e) => {

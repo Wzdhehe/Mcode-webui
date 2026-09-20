@@ -404,6 +404,8 @@
                 <button class="btn-workspace-action" id="ws-picker-nows-btn" data-i18n="ws_nows_btn">无需工作空间</button>
               </div>
             </div>
+            <!-- v2 (feat-workspace-lhl): 纯前端 webkitdirectory picker（不依赖系统 dialog API） -->
+            <input type="file" id="ws-picker-file-input" webkitdirectory style="display:none" />
           </div>
           <!-- v0.5.bc: 工作区 chip 从欢迎页挪到输入框下面（独立一行，左对齐，仿 kimi） -->
           <!-- v0.5.bx: 有对话时整个 row 隐藏（已选工作区就不让改，要改就点 sidebar "New Chat" 重新选） -->

@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "electron": "electron electron-main.cjs --no-sandbox --disable-gpu",
     "test": "node --experimental-test-module-mocks --test test/*.test.js checks/*.check.mjs test/integration/*.test.js test/matrix/*.test.js",
     "test:unit": "node --test test/*.test.js",
     "test:mocked": "node --experimental-test-module-mocks --test checks/*.check.mjs",
@@ -21,7 +22,8 @@
     "node": ">=22.19 <23 || >=24 <27"
   },
   "devDependencies": {
-    "c8": "^12.0.0"
+    "c8": "^12.0.0",
+    "electron": "^36.0.0"
   },
   "c8": {
     "include": [

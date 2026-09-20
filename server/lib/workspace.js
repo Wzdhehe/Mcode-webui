@@ -286,11 +286,9 @@ export function pickDirectoryNative(signal) {
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       if (platform === "linux") {
-        // zenity 需要 TTY 才能弹出对话框。后台 nohup 运行时 Node 没有 TTY，
-        // 用 setsid 创建独立 session，使其获得自己的 TTY 从而弹出 GTK 对话框。
-        // stdio: inherit 让 zenity 输出到终端（用户能看到路径）；pipe 捕获 stdout
-        // 以便读取返回值（exit code 0 时）。
-        child = spawn("setsid", ["--", "zenity", "--file-selection", "--directory", "--title=选择工作区目录"], {
+        // 优先用 kdialog（KDE 原生目录选择器，无"上传"按钮，体验最好）
+        // kdialog 也有 TTY 问题，用 setsid 创建独立 session
+        child = spawn("setsid", ["--", "kdialog", "--getexistingdirectory", ".", "--title", "选择工作区目录"], {
           stdio: ["ignore", "pipe", "inherit"],
           windowsHide: true,
           env: { ...process.env },
@@ -304,20 +302,17 @@ export function pickDirectoryNative(signal) {
           } else if (code === 0) {
             const path = stdout.replace(/[\r\n]+$/, "").trim();
             settle(() => resolve(path || null));
-          } else if (code === 1) {
-            // 用户取消
-            settle(() => resolve(null));
           } else {
-            // 其他错误（zenity not found 等）→ try kdialog
+            // 用户取消（code === 1）或其他错误 → try zenity
             settle(() => {
-              tryKdialog(signal).then(resolve).catch(reject);
+              tryZenity(signal).then(resolve).catch(reject);
             });
           }
         });
         child.on("error", (e) => {
           settle(() => {
             if (e.code === "ENOENT") {
-              tryKdialog(signal).then(resolve).catch(reject);
+              tryZenity(signal).then(resolve).catch(reject);
             } else {
               reject(e);
             }
