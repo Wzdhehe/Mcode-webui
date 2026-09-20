@@ -1300,11 +1300,14 @@ export function attachEvents() {
 
   // New chat
   // v0.5.ar: 新建会话 → 弹工作区选择 popover（选完工作区再调 /api/sessions）
+  // v0.5.bx-33 (v1.2): 已删除 new-chat-ws-picker，改用 chat-empty-workspace chip 下拉
   const newChatPicker = document.getElementById('new-chat-ws-picker')
   const newChatCurrent = document.getElementById('new-chat-current-ws')
   const newChatList = document.getElementById('new-chat-ws-list')
   const newChatCancel = document.getElementById('new-chat-ws-cancel')
   const newChatOther = document.getElementById('new-chat-ws-other')
+  // 仅在元素存在时初始化（兼容旧版 picker，v1.2+ 已移除）
+  if (newChatPicker) {
   function positionNewChatPicker() {
     const btn = document.getElementById('btn-new-chat')
     if (!btn) return
@@ -1371,6 +1374,7 @@ export function attachEvents() {
       newChatPicker.hidden = true
     }
   })
+  } // end if (newChatPicker)
 
   async function createNewSession(workspace) {
     // v0.5.ak: mcode 还在跑时禁止清空 chat
