@@ -2,13 +2,15 @@
 // Owns: config consts (TOKEN/CID/API_SUFFIX/HEADERS), the mutable `state`
 // binding + its 3 rebinding sites (connect/refreshSessions/refreshUsage),
 // SSE connection, panel flags (leftOpen/rightOpen/sidebarReady/
-// sessionSearchQuery) with setters, usage quota data + popover surface.
+// sessionSearchQuery) with setters, usage quota data + popover surface,
+// v2 per-request authorization queue (needs_authorization /
+// authorization_decided SSE frames + /api/auth/decision POST).
 // NOTE: cycles with render.js/events.js are intentional and safe — imported
 // bindings are only touched inside functions, never at module eval time.
 
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
-import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
+import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAlerts, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderAuthModal, renderChat, renderContext, renderGoal, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
 import { SLASH_COMMANDS, SLASH_SKILLS, attachEvents, attachModalEvents, attachedFiles, attachmentList, autoResize, checkModals, fileInput, filterSlash, hideMode, hidePerm, hidePlan, hidePlanMode, hideSettings, hideSlash, isSending, lastShownPermKey, lastShownPlanKey, lastShownPlanModeKey, modeOpen, modePopover, moveSlash, permOpen, planModeOpen, planOpen, planSending, removeAttachment, renderAttachments, renderPerm, renderPlan, selectSlash, send, sendPermAnswer, sendPlanAnswer, sendPlanModeAnswer, setMode, settingsMenu, showPerm, showPlan, showPlanMode, showSlash, slashActiveIdx, slashFiltered, slashInput, slashOpen, slashOverlay, slashQuery, slashResults, stopExec, toggleLang, toggleMode, toggleSettings, uploadFiles } from './events.js'
 
 // ============================================================
@@ -122,6 +124,209 @@ export let sidebarReady = false // v0.5.bx-31: mcodeSessions 首次非空后 tru
 export let sessionSearchQuery = ''   // v0.5.x: 侧边栏会话搜索词
 
 // ============================================================
+// v2 (2026-09-20 webui-manual-audit): per-request authorization queue
+// ============================================================
+// server/lib/authorize.js gates destructive / privacy-sensitive actions
+// (session delete / export / cross-workspace search / cleanup-orphans /
+// /clear / /new / token reset / startup cleanup) behind a fail-closed
+// 5-minute user confirmation. The server pushes `event:
+// needs_authorization` frames — JSON {requestId, action, ctx, expiresAt}
+// — over this same /api/events SSE stream, and broadcasts `event:
+// authorization_decided` {requestId, approved, decidedBy} when the
+// pending promise resolves (this tab's click, ANOTHER tab's click, or
+// the server-side timeout).
+//
+// Bug being fixed: the server side was complete but the frontend had
+// ZERO wiring — no listener, no modal, no /api/auth/decision caller —
+// so every gated action hung silently for 5 minutes and then declined
+// ("clicking does nothing").
+//
+// Ownership split: the queue lives here (state.js owns the SSE
+// connection + HEADERS); the modal that displays it lives in render.js
+// (renderAuthModal, following the ask_user modal pattern); the
+// Approve/Deny button wiring lives in events.js (attachModalEvents).
+const PENDING_AUTH_REQUESTS = []
+
+// Exported getter — ESM bindings are read-only from importers, so the
+// queue is exposed as a function; render.js / events.js read the live
+// array through it (index 0 = the request currently displayed).
+export function getPendingAuthRequests() {
+  return PENDING_AUTH_REQUESTS
+}
+
+// Drop one requestId from the queue. Idempotent on purpose — called
+// from BOTH the authorization_decided SSE handler and
+// submitAuthDecision's local removal, whichever lands first.
+export function _removePendingAuthRequest(requestId) {
+  const i = PENDING_AUTH_REQUESTS.findIndex((r) => r.requestId === requestId)
+  if (i >= 0) PENDING_AUTH_REQUESTS.splice(i, 1)
+}
+
+// submitAuthDecision — the Approve/Deny buttons (events.js wiring) call
+// this. One POST per click with JSON {requestId, approve}; approve is
+// normalized to a strict boolean (the server only counts the literal
+// true). NEVER auto-approves on any condition — the server's 5-minute
+// timeout is the only expiration authority (fail-closed decline).
+// Returns the fetch Response so the caller can surface failures inside
+// the modal; network errors propagate as rejections (caller catches).
+export async function submitAuthDecision(requestId, approve) {
+  const r = await fetch('/api/auth/decision' + API_SUFFIX, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...HEADERS },
+    body: JSON.stringify({ requestId, approve: approve === true }),
+  })
+  // 200 = resolved. 404 = already decided elsewhere (another tab or the
+  // server timeout evicted it) — the request is finished either way, so
+  // drop it locally even if the authorization_decided SSE broadcast is
+  // delayed or lost; removal is idempotent. Any other status / a thrown
+  // network error is left to the caller (events.js shows the error and
+  // re-enables the buttons so the user can retry).
+  if (r && (r.ok || r.status === 404)) {
+    _removePendingAuthRequest(requestId)
+    renderAuthModal()
+  }
+  return r
+}
+
+// ============================================================
+// v2 (2026-09-20 webui-manual-audit D1): anomaly-channel (alerts) store
+// ============================================================
+// server/lib/alerts.js pushes system-level signals — mcode subprocess
+// crash (spawn ENOENT), sqlite failure, token expiry, protocol
+// unsupported… — on the INDEPENDENT /api/alerts SSE channel (routes/
+// alerts.js) instead of polluting chat lines. Lease B02 §AP3: "the
+// bell icon (frontend) shows the alert with the matching id" — but
+// public/ had ZERO wiring, so a failed chat send was invisible (the
+// audit's P1). The store lives HERE (state.js owns SSE + module-level
+// state that survives the full-state re-renders — same rationale as
+// PENDING_AUTH_REQUESTS above); the DOM surface lives in render.js
+// (renderAlerts) and the click wiring in events.js (attachEvents).
+//
+// Wire contract (routes/alerts.js frames, default `message` events):
+//   data: {"kind":"snapshot","alerts":[…]}   — ring replay on connect
+//   data: {"kind":"append","alert":{…}}      — new alert
+//   data: {"kind":"update","alert":{…}}      — dedup merge (count++/ts)
+//   event: heartbeat                          — named event, not onmessage
+// Alert shape (lib/alerts.js normalize): {id, ts, level, msg, src,
+// cid, sessionId, data, count} — all of it is UNTRUSTED wire data.
+const ALERTS_MAX = 100 // mirror the server ring size; local cap for the popover
+const _seenAlertIds = new Set() // id → "already counted as unread once";
+//   a reconnect replays the same snapshot and must not re-inflate the
+//   badge. Insertion-ordered; halved when it grows past the cap so a
+//   long-lived tab does not accumulate unbounded id memory.
+const _SEEN_IDS_CAP = 512
+const ALERTS = [] // newest first (unshift on append) — render top-down
+let alertsUnread = 0
+
+function _rememberSeenAlertId(id) {
+  _seenAlertIds.add(id)
+  if (_seenAlertIds.size > _SEEN_IDS_CAP) {
+    // Set iterates in insertion order — drop the oldest half.
+    const drop = _seenAlertIds.size - Math.floor(_SEEN_IDS_CAP / 2)
+    let n = 0
+    for (const k of _seenAlertIds) {
+      if (n++ >= drop) break
+      _seenAlertIds.delete(k)
+    }
+  }
+}
+
+// Coerce one wire alert into the local render shape. Never throws on
+// hostile/malformed fields; id:'' means "unusable" and callers skip it.
+function _normalizeAlert(a) {
+  const o = a && typeof a === 'object' ? a : {}
+  const level = ['info', 'warn', 'error'].includes(o.level) ? o.level : 'info'
+  return {
+    id: typeof o.id === 'string' ? o.id : (o.id !== undefined ? String(o.id) : ''),
+    ts: Number(o.ts) || 0,
+    level,
+    msg: typeof o.msg === 'string' ? o.msg : String(o.msg ?? ''),
+    src: typeof o.src === 'string' && o.src ? o.src : 'system',
+    sessionId: o.sessionId ? String(o.sessionId) : null,
+    count: Number(o.count) || 1,
+  }
+}
+
+function _handleAlertFrame(frame) {
+  if (!frame || typeof frame !== 'object') return
+  if (frame.kind === 'snapshot' && Array.isArray(frame.alerts)) {
+    // Connect / reconnect replay (server ring, oldest → newest).
+    // Replace the list wholesale, but only ids never seen before may
+    // bump the unread count — an EventSource auto-reconnect replays
+    // the identical snapshot and must not re-mark everything unread.
+    let fresh = 0
+    const next = []
+    for (const raw of frame.alerts) {
+      const a = _normalizeAlert(raw)
+      if (!a.id) continue
+      if (!_seenAlertIds.has(a.id)) {
+        _rememberSeenAlertId(a.id)
+        fresh++
+      }
+      next.push(a)
+    }
+    next.reverse() // server sends oldest→newest; store newest first
+    ALERTS.length = 0
+    ALERTS.push(...next)
+    if (fresh > 0) alertsUnread += fresh
+    renderAlerts()
+    return
+  }
+  if (frame.kind === 'append' && frame.alert) {
+    const a = _normalizeAlert(frame.alert)
+    if (!a.id || _seenAlertIds.has(a.id)) return // replay dedup
+    _rememberSeenAlertId(a.id)
+    ALERTS.unshift(a)
+    if (ALERTS.length > ALERTS_MAX) ALERTS.length = ALERTS_MAX
+    alertsUnread++
+    renderAlerts()
+    return
+  }
+  if (frame.kind === 'update' && frame.alert) {
+    // Dedup merge (server bumped count/ts on an alert we already have).
+    // In-place replace by id; unknown id (cleared locally, or arrived
+    // before we connected without a snapshot entry) is ignored.
+    const a = _normalizeAlert(frame.alert)
+    if (!a.id) return
+    const i = ALERTS.findIndex((x) => x.id === a.id)
+    if (i >= 0) {
+      ALERTS[i] = a
+      renderAlerts()
+    }
+    return
+  }
+}
+
+// Read-side API for render.js / events.js (ESM bindings are read-only
+// from importers, so the list is exposed as a getter like the auth
+// queue above).
+export function getAlerts() { return ALERTS }
+export function getAlertsUnread() { return alertsUnread }
+
+// Marking-read on open (events.js bell click). Idempotent.
+export function markAllAlertsRead() {
+  alertsUnread = 0
+  renderAlerts()
+}
+
+// Clear action (popover). The list empties and the badge drops; seen
+// ids stay so a reconnect snapshot of the SAME alerts does not resurrect
+// the unread badge for things the user already disposed of.
+export function clearAlerts() {
+  ALERTS.length = 0
+  alertsUnread = 0
+  renderAlerts()
+}
+
+// v2 (2026-09-20 webui-manual-audit D1): the alerts SSE connection.
+//   Separate EventSource from the state stream on purpose (lease B02:
+//   anomaly channel is its own chokepoint with its own replay/dedup
+//   semantics). Created once — the browser's native EventSource
+//   auto-reconnect handles drops, and every (re)connect gets a fresh
+//   snapshot frame whose ids dedup against _seenAlertIds.
+export let alertsEs = null
+
+// ============================================================
 // SSE connection
 // ============================================================
 export let es = null
@@ -132,40 +337,52 @@ export function connect() {
   es = new EventSource(url)
 
   // v1.0.1: named event "auth.token_rotated" — server pushes this when
-  // an operator triggers a token rotation.
-  //
-  // v1.0.1 round 8 (CSRF / bootstrap-token-disclosure fix): the event
-  // body is NO LONGER the new token (raw string). The server now sends
-  // a JSON object `{rotated: true, at: <ms>}` — a signal, not a value.
-  // The new value is delivered out-of-band: printed to server stdout and
-  // persisted to ~/.mcode-webui/settings.json. The operator must:
-  //   1. Read the new token from stdout / settings.json
-  //   2. Re-open this URL with `?token=<new-value>` appended
-  //   3. The new tab's loadToken() picks up the value from the URL
-  // In the meantime, this tab is "stranded" with the OLD token — we
-  // clear HEADERS so the next request gets 401, which is the right
-  // signal to the user that they need to re-open.
+  // an operator triggers a token rotation. The body is plain text
+  // (the new token) — we use it to update localStorage + live HEADERS.
   es.addEventListener('auth.token_rotated', (ev) => {
     try {
-      // The body is JSON `{rotated: true, at: <ms>}`. We don't trust
-      // any token-shaped string in the payload — round 8 made sure
-      // it never carries one. Just clear local state so the next
-      // request hits 401 and the user is prompted to re-open.
-      let _payload = null
-      try { _payload = JSON.parse(ev.data || '{}') } catch { _payload = null }
-      if (!_payload || _payload.rotated !== true) return
-      setToken('') // clears HEADERS.Authorization + localStorage
-      // Dispatch a DOM event so the UI layer can show a toast.
-      // (We don't import render.js here to keep this module side-effect
-      // free; the render layer listens for this event and updates the
-      // user-visible state.)
-      try {
-        window.dispatchEvent(new CustomEvent('webui:token_rotated', {
-          detail: { at: _payload.at || Date.now() }
-        }))
-      } catch {}
-      console.log('[webui] token rotated (SSE); HEADERS + localStorage cleared. Read new value from stdout or ~/.mcode-webui/settings.json and re-open URL with ?token=...')
+      const newToken = (ev.data || '').trim()
+      if (!newToken) return
+      setToken(newToken)
+      console.log('[webui] token rotated (SSE); updated HEADERS + localStorage')
     } catch (e) { console.error('[webui] token rotation handler failed', e) }
+  })
+
+  // v2 (2026-09-20 webui-manual-audit): needs_authorization — the
+  // server's authorize() gate is asking this tab to confirm a gated
+  // action. Parse the frame, queue it, and let render.js's
+  // renderAuthModal() display it (one at a time, queue order). Frames
+  // can be replayed on SSE reconnect — dedup by requestId so a replay
+  // never double-queues or resets the displayed request.
+  es.addEventListener('needs_authorization', (ev) => {
+    try {
+      const req = JSON.parse(ev.data || '{}')
+      if (!req || typeof req.requestId !== 'string' || !req.requestId) return
+      if (PENDING_AUTH_REQUESTS.some((r) => r.requestId === req.requestId)) return
+      PENDING_AUTH_REQUESTS.push({
+        requestId: req.requestId,
+        action: typeof req.action === 'string' ? req.action : '',
+        ctx: (req.ctx && typeof req.ctx === 'object') ? req.ctx : {},
+        expiresAt: Number(req.expiresAt) || 0,
+        receivedAt: Date.now(),
+      })
+      renderAuthModal()
+    } catch (e) { console.error('[webui] needs_authorization handler failed', e) }
+  })
+
+  // v2 (2026-09-20 webui-manual-audit): authorization_decided — a
+  // pending request resolved (this tab's POST, another tab's decision,
+  // or the server's fail-closed 5-min timeout; the server broadcasts
+  // this on EVERY resolution path). Drop it and re-render: the modal
+  // closes when the queue empties, or advances to the next queued
+  // request.
+  es.addEventListener('authorization_decided', (ev) => {
+    try {
+      const d = JSON.parse(ev.data || '{}')
+      if (!d || typeof d.requestId !== 'string' || !d.requestId) return
+      _removePendingAuthRequest(d.requestId)
+      renderAuthModal()
+    } catch (e) { console.error('[webui] authorization_decided handler failed', e) }
   })
 
   es.onmessage = (ev) => {
@@ -224,6 +441,24 @@ export function connect() {
     } catch (e) { console.error('sse parse', e) }
   }
   es.onerror = () => { setTimeout(connect, 3000) }
+
+  // v2 (2026-09-20 webui-manual-audit D1): anomaly channel — a SECOND,
+  // independent EventSource (routes/alerts.js), so system-level error
+  // signals (failed chat send, subprocess crash…) reach the bell even
+  // though they never touch the state/chat streams. Frames are default
+  // `message` events; the server's 30s `heartbeat` is a NAMED event so
+  // onmessage never sees it. Created once per page: connect() re-runs
+  // on state-stream errors, and a duplicate alerts connection would
+  // double-count every frame. EventSource auto-reconnect + snapshot
+  // replay + _seenAlertIds dedup make that path safe.
+  if (!alertsEs) {
+    alertsEs = new EventSource('/api/alerts' + API_SUFFIX)
+    alertsEs.onmessage = (ev) => {
+      try {
+        _handleAlertFrame(JSON.parse(ev.data))
+      } catch (e) { console.error('alerts parse', e) }
+    }
+  }
   // v0.5.ak: user footer 已改为静态 GitHub 链接，不需要 ticker
 
   // 自动 /api/refresh 触发：页面打开 2s + 每 60s 拉一次
@@ -412,9 +647,20 @@ export function renderUsage() {
   //   quotaEnabled=false → 按钮隐藏(主 UI 不显示)
   //   quotaEnabled=true  → 按钮显示,点击开 popover
   // 当无 key 时,点开是降级提示。
+  // v2 (2026-09-20 webui-manual-audit D2): 本机永远显示按钮。
+  //   根因: server 端 quotaEnabled 默认 false (settings.js 首次运行
+  //   settings.json 里就是 false), renderUsage 无差别套 usage-hidden
+  //   → display:none → offsetWidth/offsetHeight=0, 本机fresh装时按钮
+  //   既看不见也点不了, 而它恰恰是配置 Subscription Key 的唯一入口
+  //   (popover 底部的 key 状态按钮 → api-key-modal)。修正: 只在
+  //   REMOTE client (body.is-remote, main.js 按 hostname 判定) 上保留
+  //   "quotaEnabled=false → 隐藏" 的原设计 — 远程是消费面; 本机是
+  //   配置面, 配置入口必须可达。点击后的降级路径 (无 key → 状态按钮
+  //   开 modal) 已由 renderUsagePopover 覆盖。
   const btn = document.getElementById('btn-usage')
   if (btn) {
-    btn.classList.toggle('usage-hidden', !state?.quotaEnabled)
+    const isRemote = !!(document.body && document.body.classList.contains('is-remote'))
+    btn.classList.toggle('usage-hidden', !state?.quotaEnabled && isRemote)
   }
   renderUsageValue()
   // 弹层只在打开时才更新内容（避免每秒重算浪费）
@@ -535,4 +781,3 @@ export function setSidebarReady(v) { sidebarReady = v }
 export function setLeftOpen(v) { leftOpen = v }
 export function setRightOpen(v) { rightOpen = v }
 export function setSearchQuery(q) { sessionSearchQuery = q }
-

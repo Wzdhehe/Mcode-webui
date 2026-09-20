@@ -3333,269 +3333,123 @@ body.is-remote .btn-lan-toggle { display: none; }
 .btn-lan-toggle[aria-expanded="true"] .btn-chevron { transform: rotate(90deg); }
 .btn-lan-toggle .btn-chevron { transition: transform 0.2s; }
 
-/* ============================================================ */
-/* v1.0.2: mcode 0.2.4 control surface 样式                    */
-/* ============================================================ */
-
-/* Queue badge (LLM 响应中显示, hover 展开队列列表) */
-.queue-badge-wrap {
+/* ============================================================
+   v2 (2026-09-20 webui-manual-audit D1): anomaly-channel bell +
+   alerts popover — topbar #btn-alerts + fixed #alerts-popover.
+   The bell is a status surface (like chip-online), always mounted;
+   the badge only exists while unread > 0 (render.js renderAlerts
+   owns both). Popover is fixed top-right under the topbar — the
+   topbar-status flex row would otherwise stretch with an absolutely
+   positioned child. Colors per level reuse the theme palette:
+   info=text-tertiary, warn=warning, error=danger.
+   ============================================================ */
+button.chip-alerts {
   position: relative;
-  display: flex;
-  justify-content: center;
-  margin-bottom: 6px;
-}
-.queue-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  /* v1.1.1: 用主题语义变量（浅色=墨/纸, 深色=纸/墨）— 之前 --accent-soft
-     在本主题未定义走蓝色 fallback, hover 用 --accent-hover(浅色=#000) 且
-     不改文字色 → 黑底黑字 */
-  background: var(--accent-bg);
-  color: var(--accent-text);
-  border: 1px solid var(--border-light);
-  border-radius: 12px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.queue-badge:hover {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: var(--accent);
-}
-.queue-badge-count {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-radius: 8px;
-  padding: 0 6px;
-  font-size: 11px;
-  font-weight: 600;
-  min-width: 16px;
-  text-align: center;
-}
-.queue-list {
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  margin-bottom: 6px;
-  background: var(--bg-elevated, #fff);
-  border: 1px solid var(--border-light, #dadce0);
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-  min-width: 280px;
-  max-width: 480px;
-  max-height: 240px;
-  overflow-y: auto;
-  z-index: 100;
-}
-.queue-list-header {
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary, #5f6368);
-  border-bottom: 1px solid var(--border-light, #dadce0);
-}
-.queue-list-items { padding: 4px 0; }
-.queue-list-empty {
-  padding: 16px 12px;
-  font-size: 12px;
-  color: var(--text-tertiary, #80868b);
-  text-align: center;
-}
-.queue-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  border-bottom: 1px solid var(--border-light, #f1f3f4);
-}
-.queue-item:last-child { border-bottom: none; }
-.queue-item-text {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-primary);
-}
-.queue-item-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-.queue-item-btn {
-  padding: 2px 6px;
-  font-size: 11px;
-  background: transparent;
-  border: 1px solid var(--border-light, #dadce0);
-  border-radius: 4px;
-  cursor: pointer;
-  color: var(--text-secondary);
-}
-.queue-item-btn:hover { background: var(--bg-hover, #f1f3f4); }
-.queue-item-btn.danger { color: var(--danger, #d93025); border-color: var(--danger, #d93025); }
-.queue-item-btn.danger:hover { background: #fce8e6; }
-
-/* btn-steer 顶栏 (跟 btn-send 平级, LLM 响应中显示) */
-.btn-steer {
-  background: var(--bg-elevated, #fff);
-  border: 1px solid var(--border-light, #dadce0);
-}
-.btn-steer:hover { background: var(--bg-hover, #f1f3f4); }
-.btn-steer .icon { width: 14px; height: 14px; }
-
-/* btn-mode / btn-model 恢复显示 (mcode 0.2.4 真支持 set_mode / set_config_option) */
-.btn-mode-static {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  background: var(--bg-elevated, #fff);
-  border: 1px solid var(--border-light, #dadce0);
-  border-radius: 6px;
-  font-size: 12px;
-  cursor: pointer;
-  color: var(--text-primary);
-}
-.btn-mode-static:hover { background: var(--bg-hover, #f1f3f4); }
-.btn-mode-static .icon { width: 14px; height: 14px; }
-
-#btn-model {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  background: var(--bg-elevated, #fff);
-  border: 1px solid var(--border-light, #dadce0);
-  border-radius: 6px;
-  font-size: 12px;
-  cursor: pointer;
-  color: var(--text-primary);
-}
-#btn-model:hover { background: var(--bg-hover, #f1f3f4); }
-
-/* ============================================================ */
-/* v1.0.2 Round 6: Goal budget bar (chat 顶部)                  */
-/* ============================================================ */
-.goal-bar {
-  padding: 10px 16px;
-  margin: 8px 0;
-  background: var(--bg-elevated, #fff);
-  border: 1px solid var(--border, #dadce0);
-  border-radius: 8px;
-}
-.goal-bar-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.goal-bar-title {
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text-primary);
-}
-.goal-bar-status {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--accent-soft, #e8f0fe);
-  color: var(--accent, #1a73e8);
-}
-.goal-bar-status[data-status="paused"]    { background: #fff3cd; color: #b8860b; }
-.goal-bar-status[data-status="blocked"]   { background: #fce8e6; color: #d93025; }
-.goal-bar-status[data-status="complete"]  { background: #d4edda; color: #137333; }
-.goal-bar-status[data-status="budget_limited"] { background: #f8d7da; color: #a94442; }
-.goal-bar-clear {
-  margin-left: auto;
-  background: transparent;
   border: none;
-  color: var(--text-tertiary);
   cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0 4px;
-}
-.goal-bar-clear:hover { color: var(--danger, #d93025); }
-.goal-bar-progress {
-  height: 8px;
-  background: var(--bg-hover, #f1f3f4);
-  border-radius: 4px;
-  overflow: hidden;
-}
-.goal-bar-fill {
-  height: 100%;
-  background: var(--accent, #1a73e8);
-  transition: width 0.3s;
-}
-.goal-bar-fill[data-status="complete"]        { background: #137333; }
-.goal-bar-fill[data-status="budget_limited"]  { background: #d93025; }
-.goal-bar-fill[data-status="paused"]          { background: #b8860b; }
-.goal-bar-meta {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-  text-align: right;
-}
-
-/* Delegation card (子任务快照) */
-.delegation-card {
-  padding: 8px 16px;
-  margin: 4px 0;
-  background: var(--bg-elevated, #fff);
-  border: 1px solid var(--border, #dadce0);
-  border-radius: 8px;
-}
-.delegation-card-header {
-  font-size: 12px;
-  font-weight: 600;
+  padding: 4px 8px;
   color: var(--text-secondary);
-  margin-bottom: 6px;
+  background: var(--bg-hover);
 }
-.delegation-card-items { padding: 4px 0; }
-.delegation-card-empty {
-  padding: 4px 0;
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-style: italic;
+button.chip-alerts:hover { color: var(--text); }
+button.chip-alerts .icon { width: 14px; height: 14px; display: block; }
+.alerts-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
 }
-.delegation-item {
+.alerts-badge[hidden] { display: none; }
+.alerts-popover {
+  position: fixed;
+  top: 52px; /* below the topbar */
+  right: 12px;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(420px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  font-size: 12.5px;
+  color: var(--text);
+  z-index: 200;
+}
+.alerts-popover[hidden] { display: none; }
+.alerts-popover-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 0;
-  font-size: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-light);
 }
-.delegation-item-status {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent, #1a73e8);
-  flex-shrink: 0;
-}
-.delegation-item-status[data-status="complete"]   { background: #137333; }
-.delegation-item-status[data-status="blocked"]    { background: #d93025; }
-.delegation-item-status[data-status="failed"]     { background: #80868b; }
-.delegation-item-agent { color: var(--text-secondary); }
-
-/* Ask 倒计时 (modal 顶部小标签) */
-.ask-countdown {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  margin: 6px 0;
-  background: #fff3cd;
-  border: 1px solid #ffeeba;
-  border-radius: 12px;
-  font-size: 12px;
-  color: #856404;
-}
-.ask-countdown-seconds {
+.alerts-popover-title {
   font-weight: 600;
-  color: #b8860b;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
 }
-
+.alerts-popover-clear {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.alerts-popover-clear:hover { color: var(--danger); background: var(--bg-hover); }
+.alerts-popover-body {
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.alerts-empty {
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+.alerts-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-light);
+}
+.alerts-item:last-child { border-bottom: none; }
+.alerts-item-level {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  color: var(--bg-elevated);
+  margin-top: 1px;
+}
+.alerts-item.level-info .alerts-item-level { background: var(--text-tertiary); }
+.alerts-item.level-warn .alerts-item-level { background: var(--warning); }
+.alerts-item.level-error .alerts-item-level { background: var(--danger); color: #fff; }
+.alerts-item-main { min-width: 0; flex: 1; }
+.alerts-item-msg {
+  word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+.alerts-item-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}

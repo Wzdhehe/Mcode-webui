@@ -89,6 +89,119 @@ The webui only forwards stdin / parses stdout / renders the SSE stream.
 
 ---
 
+## CORS / 跨源资源共享 (Cross-Origin Resource Sharing)
+
+> **Disclosure scope:** CORS configuration is **intentional** for v2.0
+> (LAN sharing — see §1 / `0.0.0.0` rationale). This section makes the
+> exact header values, threat model, and operator-facing mitigations
+> explicit per [OWASP CORS Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#cross-origin-resource-sharing)
+> and red-line 7 (披露完整性 / disclosure completeness).
+
+### Configuration (verbatim)
+
+The CORS headers are set on **every** response in
+[`server/router.js`](server/router.js#L344-L348):
+
+```js
+res.setHeader("Access-Control-Allow-Origin", "*");
+res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
+res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+```
+
+This config is locked in by
+[`test/router-cors.test.js`](test/router-cors.test.js#L35) — the test
+"`Allow-Headers includes Authorization`" is a **reviewer-required
+assertion** added per v1.0.1 PR #16 review feedback (without
+`Authorization` in `Allow-Headers`, cross-origin `fetch()` calls with
+`Bearer` tokens would fail the preflight and never reach the handler).
+
+### Threat model — why this is intentional
+
+The webui's primary use case is browser-based access from a device on
+the same LAN as the server (phone, second laptop, tablet). Combined
+with the §1 default `0.0.0.0` bind, that means the browser client is
+**not** necessarily same-origin with the server — for example, a phone
+on `http://192.168.1.10:8080` may be served by a webui that the
+desktop launched on a different host. Without permissive CORS, those
+cross-origin clients can't talk to the API.
+
+The trade-off chosen for v2.0:
+
+- **Permissive CORS** (`Allow-Origin: *` + `Authorization` in
+  `Allow-Headers`) — enables browser clients on the LAN to authenticate
+  via `Authorization: Bearer <token>` without any origin pinning.
+- **Token gate stays mandatory** for non-loopback requests (see §2.3,
+  §9.1) — so unauthenticated cross-origin requests still 401.
+
+The alternative — an origin whitelist — was rejected for v2.0 because
+it would force every LAN operator to enumerate their phone / tablet /
+laptop origins before first use. That's a worse UX than the disclosure
+load this section carries.
+
+### Risk — cross-origin CSRF surface
+
+`Allow-Origin: *` + `Allow-Headers: Authorization` creates a **real
+cross-origin CSRF surface** when the token is in attacker-reachable
+storage (URL query string, `localStorage`, XSS-injected state):
+
+- Browsers do **not** block `fetch("http://server:8080/api/...", {
+  headers: { Authorization: "Bearer <stolen-token>" } })` from
+  `evil.com` because `Authorization` is a custom header, not a
+  credential (cookie). CORS preflight succeeds (the server echoes
+  `Allow-Headers: Content-Type, Authorization`); the actual request
+  executes with the stolen token.
+- The destructive endpoints in §3 — `DELETE /api/sessions/:id`,
+  `POST /api/settings {resetToken: true}`, `POST /api/settings
+  {readOnly: false}`, `POST /api/debug/inject` (when `DEBUG_INJECT=1`)
+  — all accept `Authorization: Bearer` and run cross-origin without
+  any further challenge.
+- Combined with §2.3 (token may travel in `?token=` query string and
+  end up in browser history / referer / proxy logs), an attacker who
+  exfiltrates the token — via XSS into a benign page, browser
+  extension, or proxy capture — can drive destructive operations from
+  any web origin without the victim's browser warning them.
+
+This is **not** a CSRF in the classical sense (no cookie / no GET-side
+state), but it is the modern equivalent: cross-origin authenticated
+request forgery, gated only by possession of the secret.
+
+### Mitigations (recommended for operators)
+
+In order of operational cost:
+
+1. **Loopback-only bind** — set `HOST=127.0.0.1` (see §1). Eliminates
+   the entire cross-origin surface because the server is unreachable
+   from any other device, let alone any other origin. This is the
+   default-recommended posture for desktop-only use.
+2. **Disable LAN broadcast** — `POST /api/settings {lanBroadcast:
+   false}` (see §3.3). Server returns 403 with a friendly page for
+   non-local requests. Does not change CORS, but kills the cross-device
+   attack surface that motivates permissive CORS in the first place.
+3. **Tighten the read-only gate** — flip on the read-only toggle
+   (§9): `POST /api/settings {readOnly: true}` makes non-local
+   `POST` / `DELETE` return 403. Cross-origin reads still work, but
+   the destructive endpoints become unreachable cross-origin.
+4. **Rotate the token before any cross-origin exposure** — operators
+   who open the server to the LAN and intend to use browser clients
+   from multiple origins should rotate the token (§9.3) so any
+   previously-leaked value becomes inert. The new value is broadcast
+   over SSE to live clients and stored in their `localStorage`.
+5. **Fork + patch `router.js`** for higher-security deployments —
+   replace `Allow-Origin: *` with a strict whitelist (the file is
+   ~3 lines; the change is reviewed in v1.0.1 PR #16 thread). Trade-off:
+   every browser origin must be enumerated before first use.
+
+### Cross-references
+
+- §1 — `0.0.0.0` rationale and LAN broadcast toggle
+- §2.3 — Token in URL query string (related exfiltration vector)
+- §3 — Destructive endpoints (`DELETE /api/sessions/:id`,
+  `POST /api/settings {resetToken: true}`, `/api/debug/*`)
+- §9 — Token auth gate + `auth.token_rotated` SSE broadcast
+- `test/router-cors.test.js` — locks the current configuration
+
+---
+
 ## 3. Destructive operations
 
 ### 3.1 `DELETE /api/sessions/:id` — **cross-deletes into mavis sqlite**
@@ -199,9 +312,16 @@ log + a disabled feature) — it does not crash.
 
 ## 7. Testing & reproducibility
 
-- `npm test` runs `node --experimental-test-module-mocks --test test/*.test.js`.
-  382 passing tests, 1 skipped, 0 failing on a clean checkout.
-- `npm run lint` — ESLint flat config, 0 warnings on a clean checkout.
+- `npm test` runs `node --experimental-test-module-mocks --test
+  test/*.test.js checks/*.check.mjs test/integration/*.test.js
+  test/matrix/*.test.js` (mocked suites live outside `test/` so the
+  flagless marketplace root gate never trips on the mock flag — see
+  docs/CI.md "Test layout and suite routing").
+- No lint gate exists: the `lint` script was removed in the
+  2026-09-20 rigor fix (this tree never contained an ESLint or
+  Prettier config; a declared gate that never ran green was deleted
+  along with its unused devDependencies — see docs/CI.md honesty
+  notes).
 - All tests use **temp file fixtures** (`mkdtempSync`). No test writes
   to the user's real `~/.minimax/` or `~/.mcode-webui/` directory unless
   `MCODE_RUNTIME_DB` / `MCODE_WEBUI_SETTINGS_PATH` env is explicitly
@@ -213,8 +333,11 @@ log + a disabled feature) — it does not crash.
   registry-installed or non-canonical layouts point at the right
   binary explicitly. Resolution priority: env override > `$MCODE_CMD`
   derived > dev layout fallback.
-- Cross-platform: tests pass on Windows + Linux + macOS (CI matrix
-  Node 22 + 24).
+- Cross-platform: there is **no CI matrix**. The only CI is the
+  marketplace root gate (single ubuntu / Node 22 job: `npm ci` +
+  `npm run check`, which recursively runs every file under `test/`
+  flagless). Cross-platform verification is a manual local recipe —
+  see docs/CI.md "Local matrix".
 
 ---
 
@@ -228,7 +351,7 @@ panel. It centralizes the three most-relevant security / access controls:
 | **LAN access** (toggle) | On/off for the 403 gate on non-local requests (unchanged from v0.5.ap) | In-memory only; resets to `true` on restart (intentional — admins shouldn't get locked out) |
 | **Read-only mode** (toggle) | When on, non-local `POST` / `DELETE` to `/api/*` return 403 `{error: "read-only mode"}`. `GET`, `HEAD`, `OPTIONS` are exempt. Local requests are always exempt. `/api/settings` is exempt (escape hatch) | Persisted to `~/.mcode-webui/settings.json` |
 | **Token auth** (toggle) | When on, non-local requests must carry `?token=` or `Authorization: Bearer`. When off, the gate is bypassed even if a token is set (LAN-only deployment mode) | Persisted |
-| **Token value + reset** (round 8 contract — see §10) | First-run: server generates a 32-hex-char token (`crypto.randomBytes(16).toString('hex')`) and writes it to `~/.mcode-webui/settings.json`. The token is **printed to stdout exactly once at first start** (not to `.server.log`). The token is **no longer returned in any HTTP response or SSE event payload** — pre-v1.0.1-round-8 it was conditionally included in `GET /api/settings` (until acknowledged) and in the rotation SSE event. See §10 for the cross-origin threat model that drove this change. `Reset token` generates a new value, persists, and broadcasts an `auth.token_rotated` SSE event with payload `{rotated: true, at: <ms>}` (no token value). The connected client clears its localStorage + Authorization header; the operator reads the new value from server stdout or `~/.mcode-webui/settings.json` and re-opens the URL with `?token=…`. | Persisted to `~/.mcode-webui/settings.json` (mode 0600, atomic write via `.tmp` + rename) |
+| **Token value + reset** | First-run: server generates a 32-hex-char token (`crypto.randomBytes(16).toString('hex')`) and writes it to `~/.mcode-webui/settings.json`. The token is **printed to stdout exactly once at first start** (not to `.server.log`). The settings card shows the token until the operator clicks "我已保存" (acknowledge). After acknowledgment, the server stops sending the token in `GET /api/settings` responses — only already-connected clients keep it. `Reset token` generates a new value, persists, broadcasts an `auth.token_rotated` SSE event so other connected clients update their `localStorage` + `Authorization` header live, and resets `tokenAcknowledged` to `false` (the new token is shown again). | Persisted to `~/.mcode-webui/settings.json` (mode 0600, atomic write via `.tmp` + rename) |
 
 ### 9.1 Token resolution priority (per request)
 
@@ -287,31 +410,15 @@ When the operator hits "Reset token" in the UI:
   persistent settings + token generation + interface lookup.
 - **NEW** `server/lib/auth.js` — adds `setExpectedToken`,
   `setTokenAuthEnabled`. Per-request token check still happens here.
-  v1.0.1 round 8: `isRequestAuthorized()` no longer bypasses the
-  token check for cross-origin requests that come in over loopback
-  (see §10).
 - `server/lib/lan.js` — no change in v1.0.1 (kept the existing
   `detectLanIp` / `isLocalRequest` / `LAN_IP`).
 - `server/router.js` — adds read-only gate (in addition to the existing
   LAN and token gates). Interface-allowlist gate was prototyped in
   v1.0.1 but removed before release per PR #16 reviewer scope.
-  v1.0.1 round 8: CORS is no longer `Access-Control-Allow-Origin: *`
-  (see §10). New helper `setCorsHeaders(req, res)` reads the request
-  `Origin` header and either echoes it (same-origin or in
-  `MCODE_WEBUI_ALLOWED_ORIGINS` env allowlist) or omits the CORS
-  response headers entirely.
 - `server/routes/settings.js` — accepts new fields, handles rotation.
-  v1.0.1 round 8: the `POST /api/settings {resetToken: true}` response
-  no longer carries the new `currentToken` — only `{ok, changed,
-  tokenRotated, hint, tokenRotatedAt}`. The new value is delivered
-  out-of-band (server stdout + `~/.mcode-webui/settings.json`).
 - `server/lib/state-bus.js` — adds `broadcastTokenRotated`; SSE state
   push now includes `readOnly`, `tokenEnabled`, `currentToken` (when
   not acknowledged), `tokenAcknowledged`, `tokenRotatedAt`.
-  v1.0.1 round 8: `currentToken` is now ALWAYS the empty string in
-  every SSE state push (per-cid, broadcast, online-count). The
-  `auth.token_rotated` event payload is `{rotated:true, at:<ms>}`
-  (no token value). See §10.
 - `public/app/state.js` — `HEADERS` is now a live-mutable object;
   new `setToken()` + SSE `auth.token_rotated` handler.
 - `public/app/render.js` — `renderLanCardContent(settings)` exported.
@@ -326,109 +433,6 @@ When the operator hits "Reset token" in the UI:
 - Extended `test/lib-auth.test.js` (`setExpectedToken`,
   `setTokenAuthEnabled`), `test/routes-settings.test.js` (new fields,
   `resetToken`, `acknowledgeToken`), `test/_setup.js` (mock shape).
-- **NEW (round 8)** `test/csrf-token-disclosure.test.js` — 4 integration
-  tests that spawn the real server, send cross-origin requests from
-  `https://evil.example`, and assert the bootstrap token is NOT in the
-  response. These were RED pre-round-8 (CSRF blocker present) and
-  are GREEN post-round-8. See §10.
-- **MODIFIED (round 8)** `test/router-cors.test.js` — L279
-  "Allow-Origin remains wildcard" test replaced with a round-8
-  contract test (`source MUST NOT contain Access-Control-Allow-Origin:
-  '*'`) and a `setCorsHeaders` presence test. L280 + L281 unchanged.
-- **MODIFIED (round 8)** `test/routes-settings.test.js` —
-  `resetToken:true` test updated to assert the response does NOT
-  include `currentToken` (was previously checking the new value was
-  echoed back).
-- **MODIFIED (round 8)** `test/state-bus.test.js` — new
-  `state-bus — currentToken removal (round 8)` describe block:
-  per-cid push has `currentToken: ""`, broadcast push has
-  `currentToken: ""` for every client, `broadcastTokenRotated`
-  payload is JSON `{rotated:true, at:<ms>}` (no token value).
-
----
-
-## 10. v1.0.1 round 8 — Cross-origin request handling
-
-The pre-round-8 server had three properties that, combined, allowed
-a malicious webpage (`https://evil.example`) to exfiltrate the
-operator's bootstrap auth token from a webui instance running on
-the same machine (loopback / LAN). The attack was reported by
-**hetaoBackend on 2026-09-01 against PR #23 head `091dec5`** and
-reproduced locally by the `poc-csrf.mjs` script (see BASELINE for
-the post-fix state).
-
-### 10.1 The three combined properties
-
-1. **CORS was `Access-Control-Allow-Origin: *`** — any cross-origin
-   page could read responses (no preflight required for simple
-   `GET`/`POST` with JSON body).
-2. **`isRequestAuthorized(req)` bypassed Gate 3 for `isLocalRequest`** —
-   the request arrived over loopback (127.0.0.1), so the check
-   returned `true` and no token was required, regardless of where
-   the request originated in the browser.
-3. **`GET /api/settings` returned the bootstrap token in the JSON
-   body** when `tokenAcknowledged === false` (the standard "first
-   run" / "after rotation" state).
-
-The combination meant a single `fetch('http://127.0.0.1:PORT/api/settings')`
-from a malicious page retrieved the operator's token in cleartext.
-The same page could then `DELETE /api/sessions/:id` to wipe
-sessions or `POST /api/settings` to flip the read-only / LAN
-broadcast switches.
-
-### 10.2 Round 8 contract
-
-| Channel | Pre-fix (v1.0.1) | Post-fix (v1.0.1 round 8) |
-|---|---|---|
-| `GET /api/settings` response | `currentToken` if `!tokenAcknowledged` | always `""` (field kept for back-compat) |
-| `POST /api/settings {resetToken: true}` response | `currentToken: <new-value>` | no token field; `hint` points to stdout + settings.json |
-| SSE state push (per-cid + broadcast + online-count) | `currentToken` if `!tokenAcknowledged` | always `""` |
-| `auth.token_rotated` SSE event payload | raw new token (string) | `JSON.stringify({rotated:true, at:<ms>})` |
-| `Access-Control-Allow-Origin` | `*` | per-origin: same-origin OR `MCODE_WEBUI_ALLOWED_ORIGINS` env allowlist; otherwise omitted (browser blocks the cross-origin read) |
-| `isRequestAuthorized` for cross-origin over loopback | bypassed (isLocalRequest) | requires valid token (same check as non-local) |
-| Token delivery channels | stdout + settings.json + HTTP + SSE | stdout + settings.json (HTTP + SSE are out) |
-
-### 10.3 UX trade-off
-
-Pre-fix, a token rotation auto-updated the operator's
-`localStorage` + live `HEADERS` via the SSE event payload. The
-operator did not need to do anything.
-
-Post-fix, the operator must:
-1. Trigger the rotation (POST /api/settings or the UI button).
-2. Read the new value from **server stdout** (where settings.js
-   prints it on rotation) OR from `~/.mcode-webui/settings.json`.
-3. Re-open the webui URL with `?token=<new-value>` appended.
-
-The SPA shows an 8-second toast on the `auth.token_rotated` event
-(`token_rotated_toast` i18n key, default English + zh-CN strings
-in `i18n.js`) telling the user exactly what to do. The current
-tab's HEADERS are cleared by the SPA, so the next request gets
-401 and the browser re-prompts for credentials — a strong signal
-that re-open is needed.
-
-This is a deliberate trade-off: a small one-click UX convenience
-was given up to close a cross-origin token-exfiltration vector.
-
-### 10.4 Operator commands for managing the token
-
-- **Read current token**:
-  `cat ~/.mcode-webui/settings.json | grep currentToken` (path may
-  differ if `MCODE_WEBUI_SETTINGS_PATH` is overridden).
-- **Read token from server log on first start**:
-  webui prints `token:   <value>` once on stdout when the file
-  is first written.
-- **Rotate** (server-side):
-  `curl -X POST -H "Authorization: Bearer <old-token>" \
-        http://127.0.0.1:PORT/api/settings -d '{"resetToken":true}'`
-  The response is `{ok, changed, tokenRotated, hint, tokenRotatedAt}`
-  — the new value is NOT in the response; read it from stdout /
-  settings.json.
-- **MCODE_WEBUI_ALLOWED_ORIGINS** (optional env):
-  Comma-separated list of origins allowed to read responses via
-  CORS. Use only if you actually need cross-origin browser access
-  to the webui (e.g. a separate admin tool at
-  `https://admin.example.com`); default is same-origin only.
 
 
 ---

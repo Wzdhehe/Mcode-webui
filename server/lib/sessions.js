@@ -23,7 +23,44 @@ export function saveSessions(s) {
 }
 
 // 重置所有 context 字段（不只是 tokens/used；percent/spent/tps 之前漏了导致切完仍显示旧的 %）
+// v2 (2026-09-20 webui-manual-audit): ALSO reset the two "a run is in
+//   progress" claim fields — cs.running + cs.context.thinkingStatus.
+//   Before this, resetContext cleared only the counters: a mid-run
+//   switch/create/new left running.active=true + thinkingStatus="Running"
+//   parked in the client state, so the footer/context panel showed 思考中
+//   forever and the send button stayed a stop button for a run the user
+//   had navigated away from. The claim only healed if the in-flight
+//   run's finalize() later fired — runs that die in their start phase
+//   never heal. The idle shape is byte-mirrored from the runners'
+//   finalize() (mcode-acp.js / mcode-exec.js) and chat.js's
+//   resetThinkingClaim(), so switch and normal end-of-turn converge on
+//   the same at-rest state. Callers (sessions.js switch/create/delete,
+//   protocol.js activate-session, commands.js /clear + /new) all treat
+//   cs as "no longer the session that run belongs to" — none needs the
+//   claim preserved. Two deliberate boundaries:
+//   (1) NO ▍ cursor stripping here — unlike chat.js's resetThinkingClaim
+//       (same session, terminal failure), every resetContext caller has
+//       either already replaced cs.chat with the TARGET session's chat
+//       (switch: stripping would corrupt lines that belong to a
+//       different, possibly live, run) or is about to clear it
+//       (new/clear/delete). Chat ownership stays with the caller.
+//   (2) lastUsageAt still goes null — this is a session-CHANGE path:
+//       the target session has no observed usage yet, and carrying the
+//       old session's freshness datum over zeroed counters would lie.
+//       (resetThinkingClaim keeps it because THERE the session is the
+//       same one; finalize() keeps it for the same reason.)
 export function resetContext(cs) {
+  cs.running = {
+    active: false,
+    prompt: null,
+    pid: null,
+    startedAt: null,
+    model: null,
+    sessionId: null,
+    lastDeltaAt: null,
+    tps: 0,
+  };
+  cs.context.thinkingStatus = "Idle";
   cs.context.tokens = 0;
   cs.context.used = 0;
   cs.context.percent = 0;

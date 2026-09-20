@@ -9,6 +9,38 @@ This project follows [Keep a Changelog](https://keepachangelog.com/).
 The `## Unreleased` section at the top tracks changes that have
 landed on the development branch but are not yet cut into a release.
 
+## v2.0.0 — 2026-09-20 (工业化重写，同步自 MiniMax-Code-Plugins PR #55 @ 7b4aae8)
+
+v1.x 单体 `server.js` 的工业化重写。本轮同步包含 PR #55 全量 26 提交，
+含 2026-09-20 浏览器全交互面手工审计后的修复批（授权闸 UI 接线、切会话
+正文回填、发送失败可见化等）。
+
+### Added
+
+- 追加式事件流 + SHA-256 哈希链审计（防篡改留痕，fail-closed）
+- 逐请求 `authorize()` 授权闸 + `needs_authorization` SSE → 前端模态框
+  （批准/拒绝/倒计时/跨页签同步，`POST /api/auth/decision`）
+- 独立异常告警通道（SSE）+ 铃铛告警面（角标 + 弹层）
+- 会话切换正文回填（`server/lib/transcript.js`，v2 `data_json` 探针，
+  400 行/200KB 封顶，失败不阻断切换）；标题走缓存快路径
+- 虚拟滚动千会话列表、跨工作区会话搜索、会话导出（Markdown/JSON）
+- 限流（per-IP/token）、配额预测、令牌引导弹窗、本地 SBOM + CVE 门
+- i18n 中英双语全键位对齐
+
+### Changed
+
+- 单体 `server.js` 拆分为 `server/routes/` + `server/lib/` 模块面，
+  前端拆分为 `public/app/` 模块（state/render/events/i18n）
+- 测试面 1034 例（单元 + mocked + 集成 + 矩阵），零 npm 运行时依赖
+
+### Fixed
+
+- v2 授权闸前端半边缺失导致的八类受闸操作静默悬挂（删除/导出/跨区
+  搜索//clear//new/重置 token）
+- 切换 mcode 会话聊天区空白、首次切换 2s 无反馈、标题降级占位符
+- 发送失败永久「思考中」不可见（思考状态三处复位 + 告警面）
+- 本地模式下套餐用量按钮零尺寸、外观切换无效果、i18n 裸键泄漏
+
 ## v1.1.1 — 2026-09-19 (内置浏览器实测修复)
 
 在内置浏览器对 0.4.2 实测过程中发现并修复的 4+2 个缺陷。

@@ -28,6 +28,47 @@ const SQLITE3_BIN = process.env.SQLITE3_BIN || "sqlite3";
 
 const db = await import(absPath("lib/db.js"));
 
+// U5 honest environment gating (fork-preview run 35495306680, windows-latest):
+// the two fixture suites below need BOTH (a) a working sqlite3 CLI to build
+// the fixture db AND (b) a loadable better-sqlite3 through db.js's own
+// resolver — deleteMcodeSessionFromDb hard-requires mcode's bundled native
+// module (windows-latest ships neither; hosts without an ABI-matching mcode
+// install get better_sqlite3_not_loaded). Gate on the real preconditions
+// instead of failing; wherever both hold, every assertion still runs.
+const SQLITE3_CLI_OK = (() => {
+  try {
+    const r = spawnSync(SQLITE3_BIN, ["--version"], {
+      stdio: "ignore",
+      timeout: 2000,
+      windowsHide: true,
+    });
+    return r.status === 0 && !r.error;
+  } catch {
+    return false;
+  }
+})();
+// Truthiness of getMcodeBetterSqlite3() is NOT enough: the package
+// require()s cleanly even when the native binding is ABI-mismatched
+// (it loads the .node lazily), so a bare module is a false-positive
+// "loadable". Probe the exact operation deleteMcodeSessionFromDb
+// performs — constructing a Database — before declaring the env ready.
+const BETTER_SQLITE3_OK = (() => {
+  const Mod = db.getMcodeBetterSqlite3();
+  if (!Mod) return false;
+  try {
+    const probe = new Mod(":memory:");
+    probe.close();
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const DB_FIXTURE_SKIP = !SQLITE3_CLI_OK
+  ? "skipped: sqlite3 CLI not available on this runner"
+  : BETTER_SQLITE3_OK
+    ? false
+    : "skipped: no loadable better-sqlite3 (mcode not installed / ABI mismatch on this runner)";
+
 const VALID_SID = "mvs_deadbeef00000000000000000000aaaa";
 
 describe("deleteMcodeSessionFromDb — input validation", () => {
@@ -81,7 +122,7 @@ describe("MCODE_SESSION_DELETE_TABLES", () => {
   });
 });
 
-describe("deleteMcodeSessionFromDb — happy path (real sqlite3)", () => {
+describe("deleteMcodeSessionFromDb — happy path (real sqlite3)", { skip: DB_FIXTURE_SKIP }, () => {
   let tmpDir;
   let dbPath;
 
@@ -148,7 +189,7 @@ describe("deleteMcodeSessionFromDb — happy path (real sqlite3)", () => {
   });
 });
 
-describe("deleteMcodeSessionFromDb — table-missing case (does not throw)", () => {
+describe("deleteMcodeSessionFromDb — table-missing case (does not throw)", { skip: DB_FIXTURE_SKIP }, () => {
   let tmpDir;
   let dbPath;
 

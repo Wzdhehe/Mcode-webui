@@ -65,6 +65,58 @@ test("extractToken: uppercase 'BEARER' is accepted", () => {
   assert.equal(extractToken(req), "abc123");
 });
 
+// --- extractToken: v2 regex hardening (PR #55 / CodeQL) --------------------
+// `/^Bearer[ \t]+(\S.*)$/i` — disjoint character classes, no polynomial
+// backtracking. Boundary pins below keep the accepted/rejected surface
+// honest while the clip() cap stays applied.
+
+test("extractToken: multiple spaces and tabs after Bearer are accepted", () => {
+  const req = { headers: { authorization: "Bearer   \t abc123" }, url: "/" };
+  assert.equal(extractToken(req), "abc123");
+});
+
+test("extractToken: tab-only separator after Bearer is accepted", () => {
+  const req = { headers: { authorization: "Bearer\tabc123" }, url: "/" };
+  assert.equal(extractToken(req), "abc123");
+});
+
+test("extractToken: mixed-case 'bEaReR' is accepted", () => {
+  const req = { headers: { authorization: "bEaReR abc123" }, url: "/" };
+  assert.equal(extractToken(req), "abc123");
+});
+
+test("extractToken: 'Bearer ' with empty capture is rejected", () => {
+  const req = { headers: { authorization: "Bearer " }, url: "/" };
+  assert.equal(extractToken(req), "");
+});
+
+test("extractToken: 'Bearer' followed by spaces/tabs only is rejected", () => {
+  const req = { headers: { authorization: "Bearer \t  " }, url: "/" };
+  assert.equal(extractToken(req), "");
+});
+
+test("extractToken: non-SP/HTAB whitespace after Bearer is rejected (fail-closed)", () => {
+  // Old `\s+` matched U+00A0; the disjoint-class fix intentionally narrows
+  // the separator to SP/HTAB (RFC 9110 OWS). Such headers fall through to
+  // the query-string path instead of half-matching.
+  const req = { headers: { authorization: "Bearer\u00a0abc123" }, url: "/" };
+  assert.equal(extractToken(req), "");
+});
+
+test("extractToken: token with internal spaces is captured whole", () => {
+  // `(\S.*)$` runs to end-of-line; trim() only strips outer whitespace.
+  const req = { headers: { authorization: "Bearer abc def" }, url: "/" };
+  assert.equal(extractToken(req), "abc def");
+});
+
+test("extractToken: header token still clipped at 256 chars", () => {
+  const huge = "a".repeat(100_000);
+  const req = { headers: { authorization: "Bearer " + huge }, url: "/" };
+  const got = extractToken(req);
+  assert.equal(got.length, 256);
+  assert.equal(got, "a".repeat(256));
+});
+
 test("extractToken: 'Bearer<token>' without space is rejected", () => {
   const req = { headers: { authorization: "Bearerabc123" }, url: "/" };
   assert.equal(extractToken(req), "");

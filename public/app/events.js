@@ -5,8 +5,8 @@
 
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
-import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, closeApiKeyModal, connect, es, getGeneralQuota, leftOpen, openApiKeyModal, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setLeftOpen, setRightOpen, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
-import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderLanCardContent, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
+import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, clearAlerts, closeApiKeyModal, connect, es, getGeneralQuota, getPendingAuthRequests, leftOpen, markAllAlertsRead, openApiKeyModal, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setLeftOpen, setRightOpen, setSearchQuery, setSidebarReady, setState, state, submitAuthDecision, toggleUsagePopover, tokenParam, urlParams } from './state.js'
+import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, AUTH_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAlerts, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderLanCardContent, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
 
 export let slashOpen = false
 export let slashQuery = ''
@@ -131,39 +131,31 @@ export function toggleMode() {
   modePopover.hidden = !modeOpen
 }
 export function hideMode() { modeOpen = false; modePopover.hidden = true }
-// webui 内部 mode label → mcode acp mode 值 (从 server/routes/model.js handleListPermissionModes 同步)
-//   跟 server/lib/mcode-rpc.js 的 mcodePermissionToWebui 互为反向
-const WEBUI_TO_MCODE_MODE = {
-  ask: 'default',           // 每次敏感操作都问
-  auto: 'auto',             // 仅高风险询问
-  full: 'bypassPermissions', // 不询问 (旧 label 叫 full / "Full access")
-  read: 'read',             // 只读
-  off: 'off',               // 关
-  plan: 'plan',             // Plan 模式 (mcode 0.2.4 支持)
-}
-
 export async function setMode(mode) {
-  // v1.0.2: mcode 0.2.4 acp 真支持 session/set_mode, 改走新 RPC
-  //   之前 v0.5.by 只更新 webui UI label, mcode 实际不变 — 那个 v0.1.5 acp 妥协
-  //   现在 webui mode label → mcode mode (通过 WEBUI_TO_MCODE_MODE 翻译)
+  // v0.5.by: plan 模式本地 toggle — mcode 0.1.5 acp 不支持 session/set_mode (probe 验证 Method not found)
+  //   fallback: send() 时给 prompt 加 plan 模板前缀, 强制 mcode 按 Plan: 格式输出
+  //   这是 mcode 0.1.5 唯一可行的进 plan mode 路径
+  //   (goal 模式: 之前是按钮, mcode 0.1.5 不支持, 删了按钮. 用 /goal slash command 代替)
   hideMode()
   if (mode === 'plan') {
-    // plan mode: webui 端本地 toggle (state.planMode) — 不通过 mcode acp
-    //   plan mode 是 webui 内部"加 plan 模板前缀"的开关, 不是 mcode acp 模式
     state.planMode = !state.planMode
     showToast(state.planMode ? t('plan_mode_on') : t('plan_mode_off'), 2500)
     return
   }
-  // 权限 mode (ask/auto/full/read/off) — 翻译成 mcode acp 值, 调 setSessionMode (新 RPC)
-  const mcodeMode = WEBUI_TO_MCODE_MODE[mode] || 'bypassPermissions'
-  if (state.planMode) state.planMode = false
+  // 权限 mode (ask/auto/full/read) — mcode 0.1.5 acp 不支持 mid-session 改 permissionMode
+  //   server 仅更新 webui UI, mcode 实际 mode 不变 (启动时已固定)
   try {
-    await setSessionMode(mcodeMode)  // 调 /api/chat/mode, 调 McodeAcpClient.setMode
-    showToast('已切到 ' + mode, 1500)  // 简易反馈 (todo: 改成 i18n key)
-  } catch (e) {
-    console.error('[setMode]', e)
-    showToast('Mode change failed: ' + e.message, 3000)
-  }
+    const r = await fetch('/api/permissions' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ mode })
+    })
+    const j = await r.json().catch(() => ({}))
+    if (state.planMode) state.planMode = false
+    if (j && j.ok === true) {
+        showToast(t('perm_mode_note'), 4500)
+    }
+  } catch (e) { console.error(e) }
 }
 
 // ============================================================
@@ -463,6 +455,20 @@ export function attachEvents() {
   if (btnAppearance) {
     btnAppearance.addEventListener('click', (e) => {
       e.stopPropagation()
+      // v2 (2026-09-20 webui-manual-audit D3): click now CYCLES the theme
+      //   (toggleTheme — applies data-theme + persists to localStorage
+      //   'webui-theme' + re-syncs the card checkbox/label/icon) AND
+      //   toggles the appearance card open, in that order. Root cause of
+      //   the audit finding "clicking does nothing": the v2026-08-28
+      //   rework made the button ONLY reveal the card (whose theme toggle
+      //   checkbox then needed a second, discoverable-only-by-trial
+      //   interaction) — a click on the button itself had no directly
+      //   observable effect (data-theme never moved, and the card is a
+      //   .lan-card, invisible to any popover probe). Cycling here gives
+      //   immediate feedback; the card still opens so the 套餐用量
+      //   "启用" toggle (the quota master switch) stays reachable, and
+      //   applyTheme() keeps its checkbox in sync with the cycled state.
+      toggleTheme()
       toggleAppearanceCard()
     })
   }
@@ -509,6 +515,47 @@ export function attachEvents() {
     toggleUsagePopover()
   })
 
+  // ----------------------------------------------------------------
+  // v2 (2026-09-20 webui-manual-audit D1): anomaly-channel bell —
+  //   topbar #btn-alerts toggles #alerts-popover. Opening marks all
+  //   current alerts read (badge drops, list stays); the header's
+  //   清空 button empties the list (state.js clearAlerts keeps the
+  //   seen-id set so a reconnect snapshot can't resurrect the badge).
+  //   Bind-once here, DOM owned by render.js renderAlerts().
+  // ----------------------------------------------------------------
+  const btnAlerts = document.getElementById('btn-alerts')
+  const alertsPopover = document.getElementById('alerts-popover')
+  const alertsClear = document.getElementById('alerts-clear')
+  function setAlertsPopoverOpen(open) {
+    if (!alertsPopover || !btnAlerts) return
+    alertsPopover.hidden = !open
+    btnAlerts.setAttribute('aria-expanded', open ? 'true' : 'false')
+    if (open) {
+      // Marking-read on open — the popover shows the full list either
+      // way; the badge is purely "not yet looked at".
+      markAllAlertsRead()
+      renderAlerts()
+    }
+  }
+  if (btnAlerts) {
+    btnAlerts.addEventListener('click', (e) => {
+      e.stopPropagation()
+      setAlertsPopoverOpen(alertsPopover ? alertsPopover.hidden : false)
+    })
+  }
+  if (alertsClear) {
+    alertsClear.addEventListener('click', (e) => {
+      e.stopPropagation()
+      clearAlerts()
+    })
+  }
+  // Click outside closes (same pattern as the usage popover / lan card).
+  document.addEventListener('click', (e) => {
+    if (!alertsPopover || alertsPopover.hidden) return
+    if (alertsPopover.contains(e.target) || (btnAlerts && btnAlerts.contains(e.target))) return
+    setAlertsPopoverOpen(false)
+  })
+
   // v0.5.ak: 模型切换 — btn-model click 弹 model-picker popover
   // v0.5.bh: 拉 /api/models 显示可选列表，点一个直接切（用户反馈：不想手输）
   const modelPicker = document.getElementById('model-picker')
@@ -517,45 +564,6 @@ export function attachEvents() {
   async function loadModelList() {
     if (!modelPickerList) return
     modelPickerList.innerHTML = '<div class="model-picker-loading">' + t('model_picker_loading') + '</div>'
-    // v1.1: 优先用 0.3+ 的 session configOptions (probe 实测: 这是模型
-    // 切换的标准面 — 真实时值 + 当前选中标记 + BYOK 渠道一并出现)
-    try {
-      const cr = await fetch('/api/chat/config-options' + API_SUFFIX, { headers: HEADERS })
-      const cd = await cr.json().catch(() => ({}))
-      if (cd.ok && Array.isArray(cd.configOptions)) {
-        const modelOpt = cd.configOptions.find((o) => o && o.id === 'model')
-        if (modelOpt && Array.isArray(modelOpt.options) && modelOpt.options.length > 0) {
-          const current = modelOpt.currentValue || ''
-          modelPickerList.innerHTML = modelOpt.options.map((o) => {
-            const isCurrent = o.value === current
-            return '<button class="model-picker-item-btn' + (isCurrent ? ' current' : '') + '" data-model-id="' + (o.value || '').replace(/"/g, '&quot;') + '">' +
-                   '<span>' + (o.name || o.value) + '</span>' +
-                   '<span class="provider">' + t('model_picker_acp_source') + '</span>' +
-                   '</button>'
-          }).join('')
-          modelPickerList.querySelectorAll('.model-picker-item-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-              const id = btn.getAttribute('data-model-id') || ''
-              modelPicker.hidden = true
-              try {
-                // 走 set_config_option (acp.mjs 兼容 0.2.x {key,value} 形状)
-                await fetch('/api/chat/config-option' + API_SUFFIX, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', ...HEADERS },
-                  body: JSON.stringify({ key: 'model', value: id }),
-                })
-                const r = await fetch('/api/state' + API_SUFFIX, { headers: HEADERS })
-                if (r.ok) { setState(await r.json()); render() }
-                showToast && showToast(t('model_switched') + ' ' + id, 1500)
-              } catch (e) { console.error('[set-config-model]', e) }
-            })
-          })
-          return
-        }
-      }
-    } catch (e) {
-      console.warn('[models] config-options unavailable, falling back to /api/models', e)
-    }
     try {
       const r = await fetch('/api/models' + API_SUFFIX, { headers: HEADERS })
       const d = await r.json()
@@ -589,7 +597,7 @@ export function attachEvents() {
             // 服务端 pushStateFor 自动更新 state，render() 会被 SSE 推过来触发
             // 但保险起见主动 fetch 一次
             const r = await fetch('/api/state' + API_SUFFIX, { headers: HEADERS })
-            if (r.ok) { setState(await r.json()); render() }
+            if (r.ok) { state = await r.json(); render() }
             showToast && showToast(t('model_switched') + ' ' + id, 1500)
           } catch (e) { console.error('[set-model]', e) }
         })
@@ -1873,6 +1881,64 @@ export function attachModalEvents() {
   on('ask-modal', 'click', (e) => {
     if (e.target.id === 'ask-modal') closeAskModal()
   })
+  // v2 (2026-09-20 webui-manual-audit): authorize modal Approve/Deny →
+  // POST /api/auth/decision (state.js submitAuthDecision, which owns the
+  // queue removal on 200/404). One decision per request: both buttons
+  // disable on the first click and stay disabled while the POST is in
+  // flight (render.js respects AUTH_MODAL_STATE.decidingRequestId and
+  // does not re-enable them on re-render); fetch failure shows inside
+  // the modal and re-enables so the user can retry. NEVER auto-approves
+  // on any condition — countdown hitting 00:00 is visual only, the
+  // server's 5-minute fail-closed timeout is the authority.
+  const authApproveBtn = $('auth-modal-approve')
+  const authDenyBtn = $('auth-modal-deny')
+  const authErr = $('auth-modal-error')
+  const decideAuth = async (approve) => {
+    const req = getPendingAuthRequests()[0]
+    if (!req) return
+    // One decision per request: a POST for THIS head request already in
+    // flight → ignore. (Compared by id, not truthiness — a stale id left
+    // over from the previous, already-resolved head must not block the
+    // next request's decision.)
+    if (AUTH_MODAL_STATE.decidingRequestId === req.requestId) return
+    AUTH_MODAL_STATE.decidingRequestId = req.requestId
+    if (authApproveBtn) authApproveBtn.disabled = true
+    if (authDenyBtn) authDenyBtn.disabled = true
+    if (authErr) { authErr.hidden = true; authErr.textContent = '' }
+    let r = null
+    try {
+      r = await submitAuthDecision(req.requestId, approve)
+    } catch (e) {
+      // network error — surface inside the modal + allow retry
+      AUTH_MODAL_STATE.decidingRequestId = null
+      if (authApproveBtn) authApproveBtn.disabled = false
+      if (authDenyBtn) authDenyBtn.disabled = false
+      if (authErr) {
+        authErr.hidden = false
+        authErr.textContent = `${t('auth_decision_failed')}: ${e?.message || String(e)}`
+      }
+      return
+    }
+    if (!(r && (r.ok || r.status === 404))) {
+      // Real failure (400 / 5xx …) — surface + allow retry. 200/404 are
+      // already handled inside submitAuthDecision (local queue removal
+      // + modal re-render closes or advances).
+      AUTH_MODAL_STATE.decidingRequestId = null
+      if (authApproveBtn) authApproveBtn.disabled = false
+      if (authDenyBtn) authDenyBtn.disabled = false
+      if (authErr) {
+        let msg = `${t('auth_decision_failed')}${r && r.status ? ' (HTTP ' + r.status + ')' : ''}`
+        try {
+          const j = await r.json()
+          if (j && j.error) msg += ': ' + j.error
+        } catch {}
+        authErr.hidden = false
+        authErr.textContent = msg
+      }
+    }
+  }
+  if (authApproveBtn) authApproveBtn.addEventListener('click', () => decideAuth(true))
+  if (authDenyBtn) authDenyBtn.addEventListener('click', () => decideAuth(false))
   // Plan
   on('plan-close', 'click', () => {
     fetch('/api/answer' + API_SUFFIX, {
@@ -1921,354 +1987,4 @@ export function attachModalEvents() {
     })
   }
 }
-
-// ============================================================
-// v1.0.2: mcode 0.2.4 control surface — buttons + handlers
-// ============================================================
-
-// 排队当前 textarea 内容 (LLM 响应进行中)
-export async function queueCurrentMessage() {
-  const textarea = document.getElementById('input-textarea')
-  const text = (textarea.value || '').trim()
-  if (!text) return
-  try {
-    const r = await fetch('/api/chat/queue' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ text }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      textarea.value = ''
-      autoResize()
-      if (typeof showToast === 'function') showToast(t('queue_queued'))
-      // v1.1.1: 徽标数据源已改为服务端台账（SSE 推送），无需 client 端拉取
-    } else {
-      if (typeof showToast === 'function') showToast(j.error || 'queue failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('queue error: ' + e.message)
-  }
-}
-
-// 改写队列里某条
-export async function queueUpdateItem(itemId, newText) {
-  if (!itemId || !newText) return
-  try {
-    const r = await fetch('/api/chat/queue/update' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ itemId, text: newText }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (!j.ok && typeof showToast === 'function') {
-      showToast(j.error || 'queue update failed')
-    } else {
-      await refreshQueueList()
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('queue update error: ' + e.message)
-  }
-}
-
-// 从队列删一条
-export async function queueDeleteItem(itemId) {
-  if (!itemId) return
-  try {
-    const r = await fetch('/api/chat/queue/delete' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ itemId }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (!j.ok && typeof showToast === 'function') {
-      showToast(j.error || 'queue delete failed')
-    } else {
-      await refreshQueueList()
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('queue delete error: ' + e.message)
-  }
-}
-
-// 队列项触发 steer (v1.1: queue-list 面板按钮)
-export async function queueSteerItem(itemId) {
-  if (!itemId) return
-  try {
-    const r = await fetch('/api/chat/queue/steer' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ itemId }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      if (typeof showToast === 'function') showToast(t('steer_notice'))
-    } else {
-      if (typeof showToast === 'function') showToast(j.error || 'steer failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('steer error: ' + e.message)
-  }
-}
-
-// v1.1: mcode 0.3+ 不推 queue_update 通知 (probe 实测) — 队列徽标/清单
-// 的数据源改为「变更后主动拉取」: queue/update/delete/steer 成功后、
-// 以及展开队列清单时调用
-export async function refreshQueueList() {
-  try {
-    const r = await fetch('/api/chat/queue' + API_SUFFIX, { headers: HEADERS })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      state.mcodeQueue = j.items || []
-      render()
-    }
-  } catch (e) {
-    console.warn('[queue] refresh failed', e)
-  }
-}
-
-// 引导当前 turn
-export async function steerCurrentResponse(text) {
-  const s = (text || '').trim()
-  if (!s) return
-  try {
-    const r = await fetch('/api/chat/steer' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ text: s }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      if (typeof showToast === 'function') showToast(t('steer_notice'))
-    } else {
-      if (typeof showToast === 'function') showToast(j.error || 'steer failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('steer error: ' + e.message)
-  }
-}
-
-// 切 session 模式 (plan / default / acceptEdits / bypassPermissions)
-export async function setSessionMode(mode) {
-  if (!mode) return
-  try {
-    const r = await fetch('/api/chat/mode' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ mode }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (!j.ok && typeof showToast === 'function') {
-      showToast(j.error || 'mode change failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('mode error: ' + e.message)
-  }
-}
-
-// 改 session config (e.g. model 切换)
-export async function setSessionConfig(key, value) {
-  if (!key) return
-  try {
-    const r = await fetch('/api/chat/config-option' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ key, value }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (!j.ok && typeof showToast === 'function') {
-      showToast(j.error || 'config change failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('config error: ' + e.message)
-  }
-}
-
-// 从 mcode session 某条消息分叉
-export async function forkFromMessage(atMessageId) {
-  if (!atMessageId) return
-  if (!confirm(t('fork_confirm'))) return
-  try {
-    const r = await fetch('/api/sessions/fork' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ atMessageId }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      if (typeof showToast === 'function') showToast(t('fork_success'))
-    } else {
-      if (typeof showToast === 'function') showToast(j.error || t('fork_failed'))
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('fork error: ' + e.message)
-  }
-}
-
-// 接续 mcode session (Ctrl+U 走这里)
-export async function resumeMostRecent() {
-  try {
-    const r = await fetch('/api/sessions/resume' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ strategy: 'most-recent' }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      if (typeof showToast === 'function') showToast(t('resume_strategy_most_recent'))
-    } else {
-      if (typeof showToast === 'function') showToast(j.error || 'resume failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('resume error: ' + e.message)
-  }
-}
-
-// 绑定 v1.0.2 control surface 按钮 (在 attachEvents() 里调)
-//   v1.0.2 设计: btn-send 保持原 stop 行为 (plan §Q3 "前端 UI 不用动"),
-//   queue 走独立 btn-queue 按钮 — 跟 btn-send 解耦, 用户在 LLM 响应中也能点 queue
-//
-//   重要: btn-mode 和 btn-model 的 click handler 已有 (events.js:396 + 473),
-//   不要重复注册 — 重复注册会导致 handler 顺序触发, popover 一开一关 = 用户看不到
-export function attachControlSurface() {
-  // v1.0.2: 独立 Queue 按钮 — 永远把 textarea 内容加到 mcode queue
-  //   (无论 running 与否, btn-queue 都是 queue 操作 — running 时更突出)
-  const btnQueue = document.getElementById('btn-queue')
-  if (btnQueue) {
-    btnQueue.addEventListener('click', (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-      queueCurrentMessage()
-    })
-  }
-  // v1.0.2: queue badge 展开/收起队列列表
-  const queueBadge = document.getElementById('queue-badge')
-  if (queueBadge) {
-    queueBadge.addEventListener('click', (e) => {
-      e.preventDefault()
-      const list = document.getElementById('queue-list')
-      if (list) {
-        const opening = list.hidden
-        list.hidden = !list.hidden
-        // v1.1: 展开时拉一次最新队列 (0.3+ 无推送)
-        if (opening) refreshQueueList()
-      }
-    })
-  }
-  // v1.0.2: 顶栏 Steer 按钮 (LLM 响应中可见)
-  const btnSteer = document.getElementById('btn-steer')
-  if (btnSteer) {
-    btnSteer.addEventListener('click', () => {
-      const text = prompt(t('steer_input_placeholder'))
-      if (text) steerCurrentResponse(text)
-    })
-  }
-  // 注意: btn-mode 和 btn-model 的 click handler 已在 attachEvents() 里绑定 (events.js:396, 473)
-  //   不要重复! 重复会导致 popover 一开一关, 用户看不到
-  // 暴露到 window 方便其他模块调
-  try {
-    window.__webui_v102 = {
-      forkFromMessage,
-      resumeMostRecent,
-      setSessionMode,
-      setSessionConfig,
-      queueCurrentMessage,
-      queueUpdateItem,
-      queueDeleteItem,
-      steerCurrentResponse,
-    }
-  } catch {}
-}
-
-// v1.0.2 Round 6: Goal 6 个 REST 客户端 + Goal clear 按钮 + Ask 倒计时
-//   - createGoal / patchGoal / clearGoal / getGoal 调 /api/chat/goal
-//   - Ask modal 倒计时: 30s 客户端兜底 (mcode 0.2.4 文档没列, 实际可能不暴露)
-export async function createGoal(objective, tokenBudget) {
-  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...HEADERS },
-    body: JSON.stringify({ objective, ...(tokenBudget ? { tokenBudget } : {}) }),
-  })
-  return r.json().catch(() => ({}))
-}
-export async function patchGoal(fields) {
-  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', ...HEADERS },
-    body: JSON.stringify(fields),
-  })
-  return r.json().catch(() => ({}))
-}
-export async function clearGoal() {
-  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json', ...HEADERS },
-  })
-  return r.json().catch(() => ({}))
-}
-export async function getGoal() {
-  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
-    method: 'GET',
-    headers: { ...HEADERS },
-  })
-  return r.json().catch(() => ({}))
-}
-
-// Ask modal 30s 倒计时 (客户端兜底)
-//   bindAskModal 打开 ask-modal 时调 startAskCountdown(); 关闭时调 stopAskCountdown()
-let _askCountdownTimer = null
-let _askCountdownRemaining = 0
-export function startAskCountdown(seconds = 30) {
-  stopAskCountdown()
-  const banner = document.getElementById('ask-countdown')
-  const secondsEl = document.getElementById('ask-countdown-seconds')
-  if (!banner || !secondsEl) return
-  _askCountdownRemaining = seconds
-  banner.hidden = false
-  secondsEl.textContent = String(_askCountdownRemaining)
-  _askCountdownTimer = setInterval(() => {
-    _askCountdownRemaining -= 1
-    if (_askCountdownRemaining <= 0) {
-      stopAskCountdown()
-      // v1.0.2 R6 audit fix: 到 0 自动续接 — 调 askModalNextOrSend 走完整模板化 Q/A 提交
-      //   (跟用户点 send 按钮一样, 走 ASK_MODAL_STATE 模板化所有题目)
-      //   之前 sendAskAnswer({option:'default'}) 错 — sendAskAnswer 接 text 不是对象
-      try {
-        const modal = document.getElementById('ask-modal')
-        if (modal && !modal.hidden && typeof askModalNextOrSend === 'function') {
-          askModalNextOrSend()
-        }
-      } catch (e) {
-        console.warn('[ask-countdown] auto-resume failed:', e)
-      }
-      return
-    }
-    secondsEl.textContent = String(_askCountdownRemaining)
-  }, 1000)
-}
-export function stopAskCountdown() {
-  if (_askCountdownTimer) {
-    clearInterval(_askCountdownTimer)
-    _askCountdownTimer = null
-  }
-  const banner = document.getElementById('ask-countdown')
-  if (banner) banner.hidden = true
-}
-
-// 绑定 Goal 顶部交互 (清空按钮)
-export function attachGoalBar() {
-  const clearBtn = document.getElementById('goal-bar-clear')
-  if (clearBtn) {
-    clearBtn.addEventListener('click', async () => {
-      if (!confirm(t('goal_clear_confirm'))) return
-      try {
-        await clearGoal()
-        if (typeof showToast === 'function') showToast(t('goal_clear_btn'))
-      } catch (e) {
-        console.warn('[goal-bar] clear failed:', e)
-      }
-    })
-  }
-}
-
 

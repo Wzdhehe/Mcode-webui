@@ -52,6 +52,13 @@ export const HOST = process.env.HOST || "0.0.0.0";
 // `Authorization: Bearer <value>`. Local requests always bypass. See
 // plugins/Wzdhehe/mcode-webui/references/SECURITY-NOTES.md §2.
 export const TOKEN = process.env.TOKEN || "";
+// v2 (lease C08): TOKEN_STDOUT — escape hatch for docker / no-UI
+//   environments where the operator has no SSE client to receive the
+//   `token.first_run` modal. When "1", server.js prints a single
+//   NEUTRAL line ("token persisted to: <path>") — the raw token is
+//   NEVER echoed. Default off: production operators use the web UI
+//   modal that the SSE event drives. See ANTI-PATTERNS-FIX-PLAN §AP1.
+export const TOKEN_STDOUT = process.env.MCODE_WEBUI_TOKEN_STDOUT === "1";
 export const DEFAULT_MODEL =
   process.env.MCODE_MODEL || "minimax_api/MiniMax-M3";
 export const DEFAULT_TIMEOUT = process.env.MCODE_TIMEOUT || "120s";
@@ -84,6 +91,25 @@ export const MAVIS_DB_PATH = join(
 );
 export const SQLITE3_BIN =
   detectSqlite3Bin() ?? "sqlite3"; // fallback: rely on PATH (spawn will ENOENT gracefully if missing)
+
+// v2.0 (lease C03): per-{IP,token} rate limiter knobs.
+//   - MCODE_WEBUI_RATE_LIMIT      : steady-state allowance per 60s (default 60)
+//   - MCODE_WEBUI_RATE_LIMIT_BURST: hard ceiling within one window (default 100)
+// Token holders get a 2x multiplier on both (see server/lib/rate-limit.js).
+export const RATE_LIMIT_PER_MIN = Number(process.env.MCODE_WEBUI_RATE_LIMIT || 60);
+export const RATE_LIMIT_BURST = Number(process.env.MCODE_WEBUI_RATE_LIMIT_BURST || 100);
+
+// v2.0 (reconcile §6.2): re-export the four SECURITY-NOTES env vars that
+// scripts/check-docs-alignment.mjs requires as direct `export const` of the
+// same name. Each is already consumed inline by the code that follows
+// (UPLOAD_DIR reads MCODE_WEBUI_UPLOAD_DIR; db.js reads MCODE_BETTER_SQLITE3;
+// settings.js reads MCODE_WEBUI_SETTINGS_PATH; debug/inject reads DEBUG_INJECT).
+// Exposing the raw env value keeps doc-aligned introspection simple without
+// touching the consumer-side resolution.
+export const MCODE_WEBUI_UPLOAD_DIR = process.env.MCODE_WEBUI_UPLOAD_DIR || null;
+export const MCODE_WEBUI_SETTINGS_PATH = process.env.MCODE_WEBUI_SETTINGS_PATH || null;
+export const MCODE_BETTER_SQLITE3 = process.env.MCODE_BETTER_SQLITE3 || null;
+export const DEBUG_INJECT = process.env.DEBUG_INJECT || null;
 
 // v0.5.bx-44 (red-line-2): platform-specific fallback paths to try when
 //   probing for sqlite3 binary. Pure function for testability — no FS /

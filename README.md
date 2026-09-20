@@ -1,78 +1,109 @@
-# Mcode Web UI
+# Mcode Web UI Plugin
 
-**[English](README.md) | [简体中文](README.zh-CN.md)**
+> **Browser-based chat frontend for the Mcode agent runtime.**
+> Streams `mcode acp` / `mcode exec` sessions in real time. Zero npm
+> dependencies; runs on Node 22.19+.
 
-Browser-based chat frontend for the **Mcode CLI** — run `mcode` from a
-browser instead of the terminal. Speaks Mcode's own protocols directly
-(`mcode acp` JSON-RPC + `mcode exec` stream-json); not a TUI wrapper.
-Zero npm dependencies at runtime (Node 22+ stdlib only).
-
-> 三栏布局(会话/对话/上下文),`/` 命令搜索,附件上传,套餐用量右向展开,
-> token 鉴权局域网,移动端响应。
-
-```
-[Browser :8080] ←─ SSE /api/events ─ [Node server.js] ─ mcode acp / exec ─ [Mcode CLI]
-      │                                     │
-      └──── REST /api/* ────────────────────┴── ~/.minimax/v2 sqlite (read + session delete)
-```
-
-## Features
-
-- **Three-column layout** — sessions / conversation / context panel
-- **Real-time streaming** — model output, tool events (Bash / Read /
-  Edit / Glob / Grep / WebFetch…), agent thought chunks
-- **Slash command search** — `/` opens the palette with fuzzy search
-  over live Mcode commands + webui-local commands
-- **File attachments** — click / drag / Ctrl+V paste; paths injected as `@file`
-- **Quota panel** — right-side expandable: 5h + weekly quota, context
-  bar, cache hit rate, tok/s, per-session token stats
-- **Plan review & ask-user modals** — plan mode and `AskUserQuestion`
-  surface as native UI, not terminal prompts
-- **Workspace switching** — directory-tree browser (Windows drives, `/`)
-- **Token-authed LAN sharing** — `0.0.0.0` bind, `?token=` or
-  `Authorization: Bearer`, runtime on/off toggle with friendly 403 page
-- **Token auth: default-on (v1.0.1)** — on first start, the server
-  auto-generates a 32-hex token, persists it to
-  `~/.mcode-webui/settings.json`, and prints it to stdout once.
-  The settings card shows the token until you click
-  "我已保存 / I have saved it" — after that the server stops
-  sending it over `/api/settings`. Set `TOKEN` env to override.
-- **Token auth: reset + live broadcast (v1.0.1)** — "重置 token"
-  button generates a new value, persists it, and broadcasts
-  `auth.token_rotated` over SSE. All connected clients update their
-  `localStorage` + `Authorization` header **in place** — no reload
-  required. Offline clients get a fresh URL on their next visit.
-- **Token auth: acknowledged state (v1.0.1)** — after acknowledging,
-  the server stops including `currentToken` in `/api/settings`
-  responses. The UI shows a "Saved" placeholder. To view the
-  token again you must hit "Reset token" (which produces a new
-  value). Persisted across restarts.
-- **Mobile responsive** — `<900px` drawers, `<600px` single column
-- **Bilingual UI** — English / 简体中文, instant toggle
-- **Monochrome theme** — "Ink & Paper" dark / light, follows system
-- **Two transports** — `mcode acp` (default, multi-turn) with
-  `mcode exec` fallback for old clients / degraded mode
-- **Session control (v1.0.2, mcode 0.2.4+)** — fork (从指定消息分叉),
-  queue (LLM 响应中排队), steer (引导当前 turn), resume (接续最近),
-  mode switch (plan/permission/model) — 10 个新 acp RPC + 4 个新
-  sessionUpdate 通知 + 8 条新 webui 路由
+This is the mcode-plugin-guide (Agent Plugins 1.0) packaging of the
+[Mcode-webui](https://github.com/Wzdhehe/Mcode-webui) web frontend.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/Wzdhehe/Mcode-webui.git
-cd Mcode-webui
-node server.js                 # Mcode CLI auto-detected
-# → http://127.0.0.1:8080/     (LAN: http://<lan-ip>:8080/)
-
-# Recommended on shared networks:
-TOKEN=$(openssl rand -hex 16) node server.js
-# → open http://127.0.0.1:8080/?token=$TOKEN
+# 1. Install the plugin (per mavis / MiniMax Code plugin loader)
+# 2. Set TOKEN (recommended on non-loopback networks)
+export TOKEN="$(openssl rand -hex 16)"
+# 3. Start the plugin
+node server.js
+# 4. Open in browser
+#    http://127.0.0.1:8080/?token=$TOKEN
 ```
+
+## What's in the box
+
+| File | What |
+|------|------|
+| `plugin.json` | Agent Plugins 1.0 manifest (10 top-level fields, white-listed) |
+| `SKILL.md` | This plugin's skill description (frontmatter + body) |
+| `LICENSE` | MIT |
+| `README.md` | This file |
+| `references/SECURITY-NOTES.md` | **Canonical security disclosure** (read this before installing) |
+| `docs/` | ARCHITECTURE, API, CAPABILITIES, DEVELOPMENT, TROUBLESHOOTING |
+| `server/` | Node.js HTTP + SSE server |
+| `public/` | Static frontend SPA |
+| `test/` | `node:test` suites — flagless root-gate surface (see docs/CI.md) |
+| `checks/` | mocked unit checks (`t.mock.module`; need the module-mocks flag) |
+| `package.json` | Project metadata + scripts |
+
+## Screenshots
+
+The PNGs in `docs/screenshots/` are **real captures** taken against a
+running v2.0.0 server (`PORT=8123 HOST=127.0.0.1 MCODE_CMD=/Users/moc/.minimax-code/bin/mcode`)
+on 2026-09-20 with the ego-browser skill. The screenshots cover the five
+most informative views of the webui: startup, mid-chat with the prior
+"Greeting" session restored, the left-bottom settings panel (Dark / English
+/ LAN Access), a typed-but-unsent prompt with the chat-input affordances,
+and the post-send state showing the SSE delta stream.
+
+| # | What it shows |
+|---|---|
+| 1 | **Startup** — the empty chat view on first launch: top bar with workspace / model / LAN chips, an empty conversation area, and the prompt input at the bottom. |
+| 2 | **Mid-stream chat** — the webui rendering the "Greeting" session: history loaded, a streaming assistant response in progress over SSE, the in-page tok/s meter, and the per-turn context window chip. |
+| 3 | **Settings panel** — the left-bottom card with Appearance (Dark), Language (English), and LAN Access toggles; clicking LAN Access flips `POST /api/settings` and broadcasts the change via `auth.token_rotated` SSE. |
+| 4 | **Chat with prompt typed** — the input textarea showing a real user prompt ("Can you list the files in this workspace?") with the send/stop affordances, `/` slash-command hint, `@file` injection hint, and the `Enter to send` cue. |
+| 5 | **Post-send + tool call** — the webui after Enter: the user message rendered in the chat, the assistant turn streaming, and (if the model chooses) the Bash / Read / Write tool-call block with structured argument preview and the auto-collapse arrow once the call finishes. |
+
+### Inline previews
+
+The image links below use relative paths to `docs/screenshots/`. They
+resolve on the marketplace plugin tree at `plugins/Wzdhehe/mcode-webui/`.
+
+![Startup screen — empty chat on first launch](docs/screenshots/01-startup.png)
+
+![Mid-stream chat — Greeting session loaded, SSE deltas in flight](docs/screenshots/02-chat-session.png)
+
+![Settings panel — Appearance / Language / LAN Access toggles](docs/screenshots/03-settings-panel.png)
+
+![Chat input — typed prompt with send/stop affordances + slash hint](docs/screenshots/04-chat-typed.png)
+
+![Post-send + tool call — user prompt rendered, assistant SSE deltas streaming, tool-call block unfolded](docs/screenshots/05-tool-call.png)
+
+> Contributing a screenshot? See [CONTRIBUTING.md](CONTRIBUTING.md#screenshots).
+
+## Capabilities
+
+This plugin exposes 13 capabilities, declared in
+[`plugin.json`](plugin.json) under `extensions.capabilities` and
+described in full detail in [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md).
+The names below are the canonical identifiers — keep them stable;
+external registries / IDE integrations match on these strings.
+
+| Capability | One-line |
+|---|---|
+| `chat-streaming` | SSE deltas from `mcode acp` rendered token-by-token |
+| `tool-execution` | Bash / Read / Write / Edit forwarded from acp `tool_call` events |
+| `plan-mode` | Plan review modal with `agree` / `skip` / `add context` options |
+| `ask-user-tool` | 2-4 option question modal with `Other` free-text fallback |
+| `permission-prompts` | `ask` / `auto` / `full` approval modal for tool calls |
+| `workspace-switching` | Workspace picker + recent list + last-used restore |
+| `session-management` | List / create / switch / delete webui sessions |
+| `file-attachments` | Drag-drop / click / paste upload + `@path` injection |
+| `quota-usage` | `mmx quota show` + per-turn context window display |
+| `bilingual-ui` | zh-CN / en locale toggle via `t(key)` lookup tables |
+| `lan-sharing` | Default `0.0.0.0` bind with runtime on/off toggle |
+| `token-auth` | `?token=` / `Authorization: Bearer` for non-local requests |
+| `mobile-responsive` | Drawer at <900px, single column at <600px |
+
+CI asserts on every one of these names being mentioned in this README
+and in [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) (see
+`scripts/check-docs-alignment.mjs`).
 
 ## Configuration
 
-All env vars, all optional:
+All settings are environment variables. See
+[SKILL.md § Configuration](SKILL.md#configuration-environment-variables)
+and [`server/lib/config.js`](server/lib/config.js) for the canonical
+list. Most relevant:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -80,10 +111,6 @@ All env vars, all optional:
 | `HOST` | `0.0.0.0` | Bind address (override to `127.0.0.1` for loopback-only) |
 | `TOKEN` | (empty) | Required token for non-local requests. **v1.0.1**: if unset, server auto-generates a 32-hex token on first start (see "Token auth" below). |
 | `MCODE_WEBUI_SETTINGS_PATH` | `~/.mcode-webui/settings.json` | **v1.0.1**: override the settings file location (tests, non-default installs). |
-| `MCODE_MODEL` | `minimax_api/MiniMax-M3` | Default model |
-| `MCODE_CMD` | auto-detect | `mcode` / `mcode.cmd` path |
-| `MCODE_WEBUI_UPLOAD_DIR` | auto | Attachment directory |
-| `MCODE_RUNTIME_DB` | `~/.minimax/v2/...` | mcode runtime db (tests use copies) |
 
 ## Token auth (v1.0.1)
 
@@ -140,55 +167,37 @@ client or external monitor is scraping the endpoint. The
 state is persisted alongside the token itself, so the
 acknowledged flag survives server restarts.
 
-### Token auth: round 8 — token never travels in HTTP/SSE payloads
+## Security disclosure (READ THIS)
 
-v1.0.1 round 8 (CSRF / bootstrap-token-disclosure fix) tightened
-the above: `currentToken` is now ALWAYS the empty string in every
-`GET /api/settings` response and SSE state push, the
-`auth.token_rotated` event carries `{rotated: true, at}` only
-(no token value), and the reset response no longer echoes the new
-token. The operator reads the token from server stdout or
-`~/.mcode-webui/settings.json`. Cross-origin requests can no
-longer bypass the token check via loopback, and CORS is per-origin
-(`MCODE_WEBUI_ALLOWED_ORIGINS` allowlist) instead of `*`.
+Full disclosure is in
+[`references/SECURITY-NOTES.md`](references/SECURITY-NOTES.md). Key points:
 
-## Known limitations (mcode 0.1.5 acp)
-
-Reported upstream 2026-08: `session/set_mode`, `session/cancel`,
-`session/fork`, `session/delete`… return "Method not found". The webui
-whitelists these in `mcode-rpc.js` and degrades gracefully (toast +
-fallback) — no fake UI buttons. Full matrix:
-[docs/CAPABILITIES.md](docs/CAPABILITIES.md).
+- Default binds `0.0.0.0` — reachable from any device on the LAN. Use
+  `HOST=127.0.0.1` for loopback-only mode.
+- `?token=` query string is supported for browser convenience. Prefer
+  `Authorization: Bearer` header for any non-browser caller.
+- `DELETE /api/sessions/:id` writes to the user's real mavis sqlite
+  (`~/.minimax/v2/sqlite/runtime-state.sqlite`). Pass `?dryRun=true` to
+  preview before committing.
+- No telemetry, no remote endpoints, no third-party subprocesses.
 
 ## Documentation
 
 | Doc | What |
 |-----|------|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module topology, SSE schema, request lifecycle |
-| [docs/CAPABILITIES.md](docs/CAPABILITIES.md) | What works / doesn't / workarounds |
-| [docs/API.md](docs/API.md) | Every HTTP endpoint |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Dev setup, adding routes / commands / panels |
-| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common errors + verified fixes |
-| [CHANGELOG.md](CHANGELOG.md) | Release history |
-| [SECURITY-NOTES](plugins/Wzdhehe/mcode-webui/references/SECURITY-NOTES.md) | Canonical security disclosure |
-
-## Plugin packaging
-
-`plugins/Wzdhehe/mcode-webui/` holds the Agent Plugins 1.0 packaging
-(skills layout, security notes, validator) — submitted to the
-[community registry](https://github.com/MiniMax-AI/MiniMax-Code-Plugins).
-
-```bash
-npm run validate-plugin   # contract checks (mirrors the registry gate)
-npm run package:plugin    # dist/Wzdhehe/mcode-webui/ + .zip
-```
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). `npm test` (382 passing + 1 skipped) and
-`npm run lint` must stay green; plugin-tree copies sync from root.
+| [SKILL.md](SKILL.md) | Plugin skill description + trigger examples |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module topology, request lifecycle, SSE schema |
+| [docs/API.md](docs/API.md) | Every HTTP endpoint with request/response schema |
+| [docs/CAPABILITIES.md](docs/CAPABILITIES.md) | Capability matrix — what works, what doesn't |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Dev setup + how to add a route/UI panel |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common errors with verified fixes |
 
 ## License
 
-MIT — see [LICENSE](plugins/Wzdhehe/mcode-webui/LICENSE).
+MIT — see [LICENSE](LICENSE).
 
+## Maintainer
+
+- **Author**: Wzdhehe
+- **Repository**: https://github.com/Wzdhehe/Mcode-webui
+- **Homepage**: https://github.com/Wzdhehe/Mcode-webui

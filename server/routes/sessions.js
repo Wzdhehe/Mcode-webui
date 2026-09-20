@@ -1,6 +1,7 @@
 // webui/server/routes/sessions.js
 // GET/POST /api/sessions, POST /api/sessions/switch, DELETE /api/sessions/:id,
-// GET /api/acp-sessions, GET /api/acp-session-title
+// GET /api/acp-sessions, GET /api/acp-session-title,
+// GET /api/sessions/search (Lease C05 — cross-workspace fuzzy match)
 // (v0.5.bx-33: 删 POST /api/sessions/cleanup-orphans — Wzdhehe 不要这个 UI,API 一起删)
 
 import { randomUUID } from "node:crypto";
@@ -9,14 +10,48 @@ import { deleteMcodeSessionFromDb } from "../lib/db.js";
 import {
   getMcodeSessionTitle,
   getMcodeSessionsForWorkspace,
+  getMcodeSessionsCacheSync,
+  getMcodeSessionsStaleSync,
   shutdownMcodeAcpSingleton,
   dropMcodeSessionFromCache,
-  invalidateMcodeSessionsCache,
 } from "../lib/acp-client.js";
+// v2 (2026-09-20 webui-manual-audit): switch-path transcript backfill —
+// load mcode session history from the runtime DB so switching to an mvs_
+// session with no webui wrapper shows real chat instead of "No messages yet".
+import { loadTranscriptChatLines } from "../lib/transcript.js";
 import { applyMavisUsageToCs } from "../lib/mavis-usage.js";
 import { getMcodeModelLimit } from "../lib/models.js";
 import { pushStateFor, clients } from "../lib/state-bus.js";
 import { MCODE_RUNTIME_DB } from "../lib/config.js";
+import { authorize } from "../lib/authorize.js";
+import { pushAlert } from "../lib/alerts.js";
+// B01: append session lifecycle events to the hash chain.
+import { append as _eventsAppend } from "../lib/events.js";
+
+// _auditFail — shared failure sink for audit writes (fail-closed,
+// 2026-09-20 rigor fix). events.js#append THROWS on write failure; a
+// governance action must not complete with a missing audit trail, so
+// every route-level append is wrapped and lands here: HTTP 5xx + one
+// alert on the anomaly channel. `what` names the flow for the operator.
+function _auditFail(res, e, what) {
+  try {
+    pushAlert({
+      level: "error",
+      msg: `audit write failed (${what}): ${e && e.message ? e.message : String(e)}`,
+      src: "sessions",
+    });
+  } catch {}
+  console.error(`[webui] audit write failed (${what}):`, e);
+  if (res && !res.headersSent) {
+    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({
+      ok: false,
+      error: "audit write failed",
+      detail: what,
+    }));
+  }
+  return undefined;
+}
 
 // v1.0: 防"删了又出现" — webui 常驻的 mcode acp 子进程内存里还持有该 session,
 //   且会把注册表回写 db (删除后 local_runtime_sessions 行被重建 + session/list 仍返回)。
@@ -40,6 +75,42 @@ async function readJson(req) {
   } catch {
     return {};
   }
+}
+
+// v2 (2026-09-20 webui-manual-audit): title fast path — resolve an mvs_
+// session's title from the in-memory walked-session cache (the same cache
+// behind GET /api/acp-sessions via getMcodeSessionsForWorkspace) BEFORE
+// ever awaiting getMcodeSessionTitle. The fallback boots the ACP child;
+// with a missing/broken mcode binary that measured ~2.17s end-to-end AND
+// degraded the title to the "Mcode session" placeholder even though the
+// cache already held the real title. Cache getters are sync and spawn
+// nothing, so a hit keeps the switch hot path at zero ACP cost.
+//
+// Cross-workspace matching within what the module exposes: the cache holds
+// ONE workspace's list, keyed by ws. We probe the client's current ws with
+// both the fresh (30s TTL) and stale (same-ws, TTL-expired) readers, plus
+// the "" key — getMcodeSessionsForWorkspace("") caches the UNFILTERED list,
+// so a cache walked without a workspace still answers. A miss returns null
+// and the caller falls back to getMcodeSessionTitle (original behavior).
+function _lookupCachedMcodeTitle(mcodeSessionId, ws) {
+  if (!mcodeSessionId) return null;
+  const keys = [ws || "", ""];
+  for (const wsKey of keys) {
+    for (const getter of [getMcodeSessionsCacheSync, getMcodeSessionsStaleSync]) {
+      let sessions = null;
+      try {
+        sessions = getter(wsKey);
+      } catch {
+        sessions = null;
+      }
+      if (!Array.isArray(sessions)) continue;
+      const hit = sessions.find(
+        (s) => s && s.sessionId === mcodeSessionId && s.title,
+      );
+      if (hit && hit.title) return hit.title;
+    }
+  }
+  return null;
 }
 
 // GET /api/sessions — list
@@ -86,6 +157,26 @@ export async function handleNewSession(req, res, ctx) {
     sessionTotal: 0,
   };
   resetContext(cs);
+  // B01: session creation is a state-changing action; record it.
+  // We log the webui session id + title + workspace — these are not
+  // sensitive (the id is a randomUUID, title is user-visible). mcode
+  // session id is null at create time so it's omitted from data.
+  // Fail-closed: if the audit write fails we 5xx instead of claiming
+  // success with an unaudited mutation (no rollback — the JSON store
+  // write already happened; the alert carries the mismatch).
+  try {
+    _eventsAppend("session.create", {
+      target: id,
+      cid,
+      actor: "user",
+      payload: {
+        title: item.title,
+        workspace: sessionWs,
+      },
+    });
+  } catch (e) {
+    return _auditFail(res, e, "session.create");
+  }
   pushStateFor(cid);
   res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
   return res.end(JSON.stringify({ ok: true, session: item }));
@@ -118,8 +209,18 @@ export async function handleSwitchSession(req, res, ctx) {
   if (!target) {
     const isMcodeSid = /^mvs_[a-f0-9]{32}$/.test(id);
     if (isMcodeSid) {
-      const title = (await getMcodeSessionTitle(id)) || "Mcode session";
+      // v2 (2026-09-20 webui-manual-audit): cache-first title — the walked
+      // session cache usually already holds the real title (the sidebar just
+      // rendered it). Only a total cache miss pays the getMcodeSessionTitle
+      // cost, which boots the ACP child (~2.17s measured with a broken
+      // mcode binary) and used to degrade every first switch to the
+      // "Mcode session" placeholder.
       const ws = (cs.workspace && cs.workspace.dir) || "";
+      let title = _lookupCachedMcodeTitle(id, ws);
+      let titleSource = title ? "cache" : "acp";
+      if (!title) {
+        title = (await getMcodeSessionTitle(id)) || "Mcode session";
+      }
       target = {
         id: randomUUID(),
         mcodeSessionId: id,
@@ -132,7 +233,7 @@ export async function handleSwitchSession(req, res, ctx) {
       all.unshift(target);
       saveSessions(all);
       console.log(
-        `[switch] cid=${cid} created new webui session ${target.id.substring(0, 8)}… for mcode ${id.substring(0, 12)}… title="${title}"`,
+        `[switch] cid=${cid} created new webui session ${target.id.substring(0, 8)}… for mcode ${id.substring(0, 12)}… title="${title}" titleSource=${titleSource}`,
       );
     } else {
       console.log(
@@ -140,6 +241,64 @@ export async function handleSwitchSession(req, res, ctx) {
       );
       res.writeHead(404, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ ok: false, error: "session not found" }));
+    }
+  } else if (
+    // v2 (2026-09-20 webui-manual-audit): placeholder refresh — wrappers
+    // created by the branch above during the broken-title era carry the
+    // "Mcode session" placeholder forever. If the walked cache now has the
+    // real title, repair the stored wrapper. Cache-only (sync, no ACP
+    // boot): an existing wrapper must never make the hot path slower.
+    target.title === "Mcode session" &&
+    target.mcodeSessionId &&
+    /^mvs_[a-f0-9]{32}$/.test(target.mcodeSessionId)
+  ) {
+    const cachedTitle = _lookupCachedMcodeTitle(
+      target.mcodeSessionId,
+      (cs.workspace && cs.workspace.dir) || "",
+    );
+    if (cachedTitle) {
+      target.title = cachedTitle;
+      target.updatedAt = Date.now();
+      saveSessions(all);
+      console.log(
+        `[switch] cid=${cid} refreshed placeholder title for ${target.id.substring(0, 8)}… → "${cachedTitle}"`,
+      );
+    }
+  }
+  // v2 (2026-09-20 webui-manual-audit): transcript backfill — when the
+  // resolved target has NO webui chat yet but IS a real mvs_ session, load
+  // the mcode transcript from the runtime DB (read-only) and map it into
+  // the webui chat-line grammar BEFORE responding, so response session.chat
+  // and cs.chat carry history. Caps inside (last 400 lines / 200KB) keep
+  // the SSE state push bounded; a 1000+-message session must not balloon
+  // it. FAILURE MUST NOT BREAK SWITCHING: any error logs and continues
+  // with chat: [] — the switch itself always succeeds.
+  if (
+    target.mcodeSessionId &&
+    /^mvs_[a-f0-9]{32}$/.test(target.mcodeSessionId) &&
+    (!Array.isArray(target.chat) || target.chat.length === 0)
+  ) {
+    try {
+      const r = loadTranscriptChatLines(target.mcodeSessionId, {
+        dbPath: MCODE_RUNTIME_DB,
+      });
+      if (r.ok && r.lines.length > 0) {
+        target.chat = r.lines;
+        target.updatedAt = Date.now();
+        saveSessions(all); // persist the populated wrapper (updatedAt bumped)
+        console.log(
+          `[switch] cid=${cid} transcript backfill ${target.id.substring(0, 8)}… mcode=${target.mcodeSessionId.substring(0, 12)}… lines=${r.lines.length} msgs=${r.messageCount} probe=${r.probe}${r.truncated ? " (capped)" : ""}`,
+        );
+      } else if (!r.ok) {
+        console.log(
+          `[switch] cid=${cid} transcript unavailable for ${target.mcodeSessionId.substring(0, 12)}… reason=${r.reason || "unknown"}`,
+        );
+      }
+    } catch (e) {
+      console.warn(
+        `[switch] cid=${cid} transcript backfill failed for ${target.mcodeSessionId.substring(0, 12)}… (continuing with empty chat):`,
+        e && e.message ? e.message : e,
+      );
     }
   }
   const prevSid = cs.sessionId;
@@ -176,6 +335,26 @@ export async function handleSwitchSession(req, res, ctx) {
           console.warn(`[switch.mavis] cid=${cid} error: ${e.message}`);
       });
   }
+  // B01: session switch — record which session was activated and from
+  // which prior session. matchKind tells us whether we matched by
+  // mcodeSessionId or webuiId (useful when debugging "why did this
+  // resolve to session X"). prevSid is the prior session id (or "" if
+  // this was the first switch). Fail-closed → 5xx + alert.
+  try {
+    _eventsAppend("session.switch", {
+      target: cs.sessionId,
+      cid,
+      actor: "user",
+      payload: {
+        from: prevSid || "",
+        matchKind: matchKind || "new_from_mcode",
+        mcodeSessionId: cs.mcodeSessionId || "",
+        title: cs.sessionTitle,
+      },
+    });
+  } catch (e) {
+    return _auditFail(res, e, "session.switch");
+  }
   pushStateFor(cid);
   console.log(
     `[switch] cid=${cid} OK prev.sessionId=${prevSid ? prevSid.substring(0, 8) : "null"}… → new.sessionId=${cs.sessionId.substring(0, 8)}… title="${cs.sessionTitle}" chatLen=${cs.chat.length}`,
@@ -198,7 +377,8 @@ export async function handleSwitchSession(req, res, ctx) {
 // v0.5.bx 系列:支持 ?dryRun=true 走预览路径 (mcode-plugin-guide red-lines.md §"写操作/破坏性操作")
 //   dryRun=true 时,函数走 readonly SQL 路径,只统计每个表的行数,不修改任何数据
 //   行为:true 删除路径不变
-export function handleDeleteSession(req, res, ctx) {
+//   v2 (B03): real-delete path is async because it awaits authorize()
+export async function handleDeleteSession(req, res, ctx) {
   const cs = ctx.cs;
   const cid = ctx.cid;
   const id = ctx.pathname.slice("/api/sessions/".length);
@@ -225,6 +405,52 @@ export function handleDeleteSession(req, res, ctx) {
     idx = all.findIndex((s) => s.mcodeSessionId === id);
     if (idx >= 0) matchKind = "mcodeSessionId";
   }
+  // B03: real-delete path must pass per-request authorize() before
+  //   mutating db / saveSessions / killMcodeSessionResurrection.
+  //   dryRun=true bypasses (preview only — no side effects to gate).
+  if (!dryRun) {
+    const authResult = await authorize("session.delete", {
+      cid,
+      targetSessionId: id,
+      matchKind: matchKind || (idx < 0 ? "unknown" : "webuiId"),
+      isMcodeSid: /^mvs_[a-f0-9]{32}$/.test(id),
+      isOrphan: idx < 0,
+      chatLen: idx >= 0 && all[idx] && Array.isArray(all[idx].chat) ? all[idx].chat.length : 0,
+    });
+    if (!authResult.approved) {
+      console.log(
+        `[delete] cid=${cid} DECLINED id=${id.substring(0, 12)}… reason=${authResult.decidedBy}`,
+      );
+      res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+      return res.end(JSON.stringify({
+        ok: false,
+        error: "authorize declined",
+        decidedBy: authResult.decidedBy,
+        decidedAt: authResult.decidedAt,
+      }));
+    }
+    // Write-ahead audit (2026-09-20 rigor fix): the destructive intent
+    // MUST be durably recorded BEFORE any persistent mutation (db rows,
+    // sessions store, subprocess kill). If this append fails we abort
+    // the delete entirely — an unaudited destructive action is the one
+    // failure mode this gate exists to prevent. The matching outcome
+    // event (kind "session.delete") is written after the mutation.
+    try {
+      _eventsAppend("session.delete.intent", {
+        target: id,
+        cid,
+        actor: "user",
+        payload: {
+          matchKind: matchKind || "unknown",
+          isOrphan: idx < 0,
+          chatLen: idx >= 0 && all[idx] && Array.isArray(all[idx].chat) ? all[idx].chat.length : 0,
+          decidedBy: authResult.decidedBy,
+        },
+      });
+    } catch (e) {
+      return _auditFail(res, e, "session.delete.intent");
+    }
+  }
   // v0.5.bx-19: 兜底 — webui session db 找不到, 但 id 是 mvs_xxx → 当孤儿 mcode session 直接 SQL 删
   if (idx < 0) {
     if (/^mvs_[a-f0-9]{32}$/.test(id)) {
@@ -244,6 +470,24 @@ export function handleDeleteSession(req, res, ctx) {
           cs.chat = [];
           resetContext(cs);
           pushStateFor(cid);
+        }
+        // B01: orphan mcode session deletion (no webui session row).
+        // Outcome event; the intent line was written before the gate
+        // fan-out above. Failure → 5xx + alert (rows are already gone;
+        // the operator must see the audit gap, not a silent success).
+        try {
+          _eventsAppend("session.delete", {
+            target: id,
+            cid,
+            actor: "user",
+            payload: {
+              matchKind: "orphan_mcode",
+              dryRun,
+              rowsAffected: (mcodeDbDel.log || []).length,
+            },
+          });
+        } catch (e) {
+          return _auditFail(res, e, "session.delete(orphan_mcode)");
         }
         res.writeHead(200, {
           "Content-Type": "application/json; charset=utf-8",
@@ -280,6 +524,26 @@ export function handleDeleteSession(req, res, ctx) {
     console.log(
       `[delete] cid=${cid} DRYRUN id=${id.substring(0, 12)}… mcodeDbDel=${JSON.stringify(mcodeDbDel)}`,
     );
+    // B01: dryRun is itself a state-touching action — the operator
+    // is previewing a delete, so record the preview but never the
+    // actual session content. dryRun:true marker lets verify / audit
+    // distinguish "actually deleted" from "previewed delete".
+    // Fail-closed → 5xx + alert (preview didn't mutate, but an
+    // unaudited preview still misleads the operator's audit view).
+    try {
+      _eventsAppend("session.delete", {
+        target: id,
+        cid,
+        actor: "user",
+        payload: {
+          matchKind,
+          dryRun: true,
+          previewedRows: mcodeDbDel.totalRows || 0,
+        },
+      });
+    } catch (e) {
+      return _auditFail(res, e, "session.delete(dryRun)");
+    }
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
     });
@@ -335,6 +599,31 @@ export function handleDeleteSession(req, res, ctx) {
   }
   if (touchedCids.length === 0) touchedCids = [cid];
   for (const c of touchedCids) pushStateFor(c);
+  // B01: real session delete (the dangerous one). Record which webui
+  // session was deleted, what the match kind was, how many cids had
+  // their active session cleared (this is the "fan-out" effect that
+  // surprised users historically), and the mcode db deltas. Title
+  // is logged (not sensitive — it was user-visible in the sidebar).
+  // Outcome event; failure → 5xx + alert. The deletion itself already
+  // happened — we do NOT paper over it with a 200, the operator must
+  // see both the response failure and the alert.
+  try {
+    _eventsAppend("session.delete", {
+      target: id,
+      cid,
+      actor: "user",
+      payload: {
+        matchKind,
+        dryRun: false,
+        remaining: all.length,
+        touchedCids: touchedCids.length,
+        mcodeRowsAffected: mcodeDbDel && mcodeDbDel.log ? mcodeDbDel.log.length : 0,
+        title: deletedItem.title,
+      },
+    });
+  } catch (e) {
+    return _auditFail(res, e, "session.delete");
+  }
   console.log(
     `[delete] cid=${cid} OK match=${matchKind} deleted.webuiId=${deletedItem.id.substring(0, 8)}… remaining=${all.length}`,
   );
@@ -377,189 +666,321 @@ export async function handleAcpSessionTitle(req, res, _ctx) {
   );
 }
 
-// --- v1.0.2: mcode 0.2.4 control surface handlers ---
-
-// POST /api/sessions/fork — 从 mcode session 的某条消息分叉
-//   body: { atMessageId, workspace? }
-//   调 mcode acp session/fork RPC
-//   注意: fork 是 mcode 自己的事 — 返回新 sessionId 后我们 invalidate cache,
-//   侧栏 mcodeSessions 自动包含新 fork (跟普通 session 一样)
-export async function handleFork(req, res, ctx) {
-  const cs = ctx.cs;
-  const cid = ctx.cid;
-  const payload = await readJson(req);
-  const atMessageId = payload.atMessageId;
-  const workspace = payload.workspace || (cs.workspace && cs.workspace.dir) || "";
-  if (!cs.mcodeSessionId) {
-    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
-    return res.end(
-      JSON.stringify({ ok: false, error: "no active mcode session" }),
-    );
+// Lease C05: GET /api/sessions/search?q=<text>&workspace=<path>&limit=<n>
+//   Cross-workspace session search. The prior sidebar search
+//   (renderSessions in public/app/render.js) only filtered the
+//   already-loaded list — it could not surface sessions stored under
+//   a different `workspace` field. This endpoint walks the persisted
+//   sessions JSON so typing into the sidebar box can show matches
+//   across all workspaces the user has touched.
+//
+//   Query params:
+//     q          fuzzy substring match on session.title (case-insensitive).
+//                Required for the search to return anything; empty q
+//                returns [] (use GET /api/sessions for "list all").
+//     workspace  optional exact workspace path filter. Empty = all
+//                workspaces. When set, the dedup-by-workspace rule
+//                below is a no-op (every result already shares the
+//                same workspace).
+//     limit      default 20, max 100, min 1. Out-of-range is clamped.
+//
+//   Response: [Array<{id, title, workspace, updatedAt, matchScore}>]
+//     matchScore is a deterministic 0-100 integer that the client can
+//     use to sort results. Higher = better match:
+//       100  exact title == q
+//        50  title startsWith q
+//        10  title contains q (case-insensitive)
+//         1  chat-tail fallback (rare; old sessions without titles)
+//         0  no title but id contains q
+//
+//   Dedup rule: "同名 workspace 的 session 只保留最近一条". For each
+//   unique workspace path that produced a match, we keep only the
+//   session with the highest matchScore; on tie, the most recent
+//   updatedAt wins. This collapses repeated search hits in one
+//   workspace to a single representative row.
+//
+//   Gate (B03 / integration touchpoint): cross-workspace search
+//   exposes titles from workspaces the user may have left open. We
+//   gate with authorize("session.search", ctx). The new action name
+//   is appended to AUTHORIZE_ACTIONS in server/lib/authorize.js so
+//   the whitelist check accepts it. In production this pops the same
+//   needs_authorization SSE modal as session.delete / session.export;
+//   tests drive the decision via test/_setup.js#withDecisions (the
+//   execArgv auto-approve was removed in the 2026-09-20 rigor fix).
+//
+//   Audit (B01): the search itself is non-destructive so we do NOT
+//   append a session.search event by default. The authorize call
+//   already writes auth.pending / auth.approve / auth.reject events
+//   to the same chain, which is enough for audit purposes.
+export async function handleSearchSessions(req, res, ctx) {
+  const cid = (ctx && ctx.cid) || "";
+  const url = new URL(req.url, "http://localhost");
+  const q = (url.searchParams.get("q") || "").trim();
+  const workspaceParam = (url.searchParams.get("workspace") || "").trim();
+  let limit = parseInt(url.searchParams.get("limit") || "20", 10);
+  if (!Number.isFinite(limit)) limit = 20;
+  if (limit < 1) limit = 1;
+  if (limit > 100) limit = 100;
+  // B03 gate: cross-workspace reads surface titles from workspaces
+  //   the user is not currently in. Gate the same way session.delete
+  //   / session.export are gated. Tests drive the real decision path
+  //   via test/_setup.js#withDecisions.
+  const authResult = await authorize("session.search", {
+    cid,
+    q,
+    workspace: workspaceParam,
+    limit,
+  });
+  if (!authResult.approved) {
+    res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({
+      ok: false,
+      error: "authorize declined",
+      decidedBy: authResult.decidedBy,
+      decidedAt: authResult.decidedAt,
+    }));
   }
-  if (!atMessageId) {
-    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
-    return res.end(
-      JSON.stringify({ ok: false, error: "atMessageId required" }),
-    );
-  }
-  const { McodeAcpClient } = await import("../../acp.mjs");
-  const client = new McodeAcpClient({ debug: false });
-  try {
-    await client.start();
-
-        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
-        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
-        if (cs.mcodeSessionId) {
-          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
-        }
-      const r = await client.fork(
-      cs.mcodeSessionId,
-      atMessageId,
-      workspace || undefined,
-    );
-    // 失效 mcode sessions cache, 侧栏会自动显示新 fork
-    invalidateMcodeSessionsCache(workspace);
-    // 记录到 cs.mcodeForks (环形 buffer 5 条)
-    const { broadcastForked } = await import("../lib/state-bus.js");
-    broadcastForked(cid, {
-      forkId: (r && (r.sessionId || r.forkId)) || `fork-${Date.now()}`,
-      atMessageId,
-      createdAt: Date.now(),
-      title: r && r.title ? r.title : `${cs.sessionTitle || "Session"} (fork)`,
-    });
+  // q empty: by spec, search is a no-op (not a list-all endpoint).
+  //   Returning [] keeps the client UX simple — empty box == empty
+  //   result, and the existing renderSessions path handles "no
+  //   search" with the full list.
+  if (!q) {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, fork: r || null }));
-  } catch (e) {
-    console.warn(`[sessions.fork] cid=${cid} error: ${e.message}`);
-    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: false, error: e.message }));
-  } finally {
-    client.stop();
+    return res.end(JSON.stringify({ ok: true, results: [] }));
   }
-}
-
-// POST /api/sessions/resume — 接续 mcode session
-//   body: { sessionId?, strategy? }  strategy: 'specified' (default) | 'most-recent'
-//   调 mcode acp session/resume RPC
-export async function handleResume(req, res, ctx) {
-  const cs = ctx.cs;
-  const cid = ctx.cid;
-  const payload = await readJson(req);
-  const strategy = payload.strategy || "specified";
-  let targetSid = payload.sessionId || null;
-  // most-recent: 列 mcode sessions, 过滤 cwd 跟当前 workspace 一致, 选最近一个
-  if (strategy === "most-recent") {
-    const workspace = (cs.workspace && cs.workspace.dir) || "";
-    try {
-      const all = await getMcodeSessionsForWorkspace(workspace);
-      if (Array.isArray(all) && all.length > 0) {
-        targetSid = all[0].sessionId || all[0].id || null;
-      }
-    } catch (e) {
-      console.warn(`[sessions.resume] list failed cid=${cid}: ${e.message}`);
+  const all = loadSessions();
+  const qLower = q.toLowerCase();
+  // Per-session score: deterministic 0-100 integer.
+  //   We score on title first (it's the user-visible label); id is
+  //   a secondary fallback so typing part of a session id still
+  //   finds it.
+  function scoreSession(s) {
+    const title = (s && s.title ? String(s.title) : "").trim();
+    const titleLower = title.toLowerCase();
+    if (titleLower && titleLower === qLower) return 100;
+    if (titleLower && titleLower.startsWith(qLower)) return 50;
+    if (titleLower && titleLower.includes(qLower)) return 10;
+    const id = (s && s.id ? String(s.id) : "").toLowerCase();
+    if (id && id.includes(qLower)) return 1;
+    return 0;
+  }
+  // Filter by workspace if requested, then by score > 0.
+  const scored = [];
+  for (const s of all) {
+    if (!s || typeof s !== "object") continue;
+    if (workspaceParam) {
+      const ws = (s.workspace || "").trim();
+      if (ws !== workspaceParam) continue;
+    }
+    const score = scoreSession(s);
+    if (score <= 0) continue;
+    scored.push({
+      id: s.id || "",
+      title: (s.title || "").toString(),
+      workspace: (s.workspace || "").toString(),
+      updatedAt: typeof s.updatedAt === "number" ? s.updatedAt : 0,
+      matchScore: score,
+    });
+  }
+  // Dedup by workspace: keep the best match per workspace path.
+  //   Empty-string workspace (legacy / unset) is its own bucket — it
+  //   still gets one representative row.
+  const bestByWs = new Map();
+  for (const item of scored) {
+    const wsKey = item.workspace || "";
+    const prev = bestByWs.get(wsKey);
+    if (!prev) {
+      bestByWs.set(wsKey, item);
+      continue;
+    }
+    if (item.matchScore > prev.matchScore) {
+      bestByWs.set(wsKey, item);
+    } else if (
+      item.matchScore === prev.matchScore &&
+      item.updatedAt > prev.updatedAt
+    ) {
+      bestByWs.set(wsKey, item);
     }
   }
-  if (!targetSid) {
-    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
-    return res.end(
-      JSON.stringify({
-        ok: false,
-        error: "sessionId required (or strategy=most-recent with existing sessions)",
-      }),
-    );
-  }
-  const { McodeAcpClient } = await import("../../acp.mjs");
-  const client = new McodeAcpClient({ debug: false });
-  try {
-    await client.start();
-
-        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
-        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
-        if (cs.mcodeSessionId) {
-          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
-        }
-      await client.resume(
-      targetSid,
-      (cs.workspace && cs.workspace.dir) || undefined,
-    );
-    // 更新 cs (本地视图切到该 session)
-    cs.mcodeSessionId = targetSid;
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, sessionId: targetSid }));
-  } catch (e) {
-    console.warn(`[sessions.resume] cid=${cid} error: ${e.message}`);
-    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: false, error: e.message }));
-  } finally {
-    client.stop();
-  }
+  // Sort: score desc, then updatedAt desc, then workspace asc (stable).
+  const results = [...bestByWs.values()];
+  results.sort((a, b) => {
+    if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+    if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+    return (a.workspace || "").localeCompare(b.workspace || "");
+  });
+  const limited = results.slice(0, limit);
+  res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+  return res.end(JSON.stringify({ ok: true, results: limited }));
 }
 
-// --- v1.1: mcode 0.3/0.4 session center (ACP 面) ---
+// B03 + AP11 fix: POST /api/sessions/cleanup-orphans
+//   Wires the missing endpoint that ANTI-PATTERNS-FIX-PLAN §AP11 noted
+//   as documented-but-unimplemented. The endpoint:
+//     1) dryRun=true  → preview only (count + would-be-deleted ids).
+//                       Skips authorize() because no side effects occur.
+//     2) dryRun=false (or absent) → real delete path. Must pass
+//                       authorize('sessions.cleanup-orphans', ctx) first.
+//                       Each session is fed through handleDeleteSession's
+//                       real-delete branch so the audit trail / mcode
+//                       db cleanup / cross-tab fan-out stay consistent.
+//   The cleanup targets: default-named webui sessions (New session /
+//   Untitled / 对话 N) whose chat is empty AND whose updatedAt is older
+//   than 24h — same rule as cleanupEmptyDefaultSessions() in lib/sessions.js.
+import { existsSync, readFileSync } from "node:fs";
+import { SESSIONS_DB } from "../lib/config.js";
 
-// POST /api/sessions/acp-activate — 激活一个 mcode session (session/activate)
-//   body: { sessionId }
-//   仅切换 mcode 侧的 current session 语义; webui 本地视图用 /api/sessions/switch
-export async function handleAcpActivate(req, res, ctx) {
-  const cs = ctx.cs;
-  const payload = await readJson(req);
-  const sessionId = payload.sessionId;
-  if (!sessionId) {
-    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
-    return res.end(JSON.stringify({ ok: false, error: "sessionId required" }));
-  }
-  const { McodeAcpClient } = await import("../../acp.mjs");
-  const client = new McodeAcpClient({ debug: false });
+const ORPHAN_STALE_MS = 24 * 60 * 60 * 1000;
+
+function _findOrphanIds() {
+  if (!existsSync(SESSIONS_DB)) return [];
+  let all;
   try {
-    await client.start();
-
-        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
-        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
-        if (cs.mcodeSessionId) {
-          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
-        }
-      await client.activate(sessionId);
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, sessionId }));
-  } catch (e) {
-    console.warn(`[sessions.acpActivate] cid=${ctx.cid} error: ${e.message}`);
-    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: false, error: e.message }));
-  } finally {
-    client.stop();
+    let raw = readFileSync(SESSIONS_DB, "utf8");
+    if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1); // 剥 BOM
+    all = JSON.parse(raw);
+  } catch {
+    return [];
   }
+  if (!Array.isArray(all) || all.length === 0) return [];
+  const now = Date.now();
+  return all
+    .filter((s) => {
+      if (!s || !s.id) return false;
+      const hasChat = Array.isArray(s.chat) && s.chat.length > 0;
+      if (hasChat) return false;
+      const t = (s.title || "").trim();
+      const isDefault =
+        t === "New session" || t === "Untitled" || /^对话 \d+$/.test(t);
+      if (!isDefault) return false;
+      if (s.updatedAt && now - s.updatedAt < ORPHAN_STALE_MS) return false;
+      return true;
+    })
+    .map((s) => s.id);
 }
 
-// POST /api/sessions/acp-close — 关闭 mcode session 的 ACP 视图
-//   body: { sessionId }
-//   turn 运行中调用 = 取消该 turn (prompt 以 stopReason:"cancelled" 返回)。
-//   会话本身保留在 session/list (mcode 没有 ACP 面的 delete/archive)。
-export async function handleAcpClose(req, res, ctx) {
-  const cs = ctx.cs;
-  const payload = await readJson(req);
-  const sessionId = payload.sessionId;
-  if (!sessionId) {
-    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
-    return res.end(JSON.stringify({ ok: false, error: "sessionId required" }));
-  }
-  const { McodeAcpClient } = await import("../../acp.mjs");
-  const client = new McodeAcpClient({ debug: false });
+export async function handleCleanupOrphans(req, res, ctx) {
+  const cid = (ctx && ctx.cid) || "";
+  let dryRun = false;
   try {
-    await client.start();
-
-        // v1.1: 0.4.2 ACP 会话是进程域的 — fresh client 必须先 load 才能
-        // 操作 session（否则 goal/queue/mode/close 全部 Resource not found）
-        if (cs.mcodeSessionId) {
-          await Promise.resolve(client.loadSession?.(cs.mcodeSessionId, (cs.workspace && cs.workspace.dir) || undefined)).catch(() => {});
-        }
-      await client.closeSession(sessionId);
+    const qIdx = (req.url || "").indexOf("?");
+    if (qIdx >= 0) {
+      const params = new URLSearchParams(req.url.slice(qIdx + 1));
+      dryRun = params.get("dryRun") === "true";
+    }
+  } catch {}
+  const targetIds = _findOrphanIds();
+  // Preview path: no authorize gate (no side effects).
+  if (dryRun) {
+    console.log(
+      `[cleanup-orphans] cid=${cid} DRYRUN would-delete=${targetIds.length}`,
+    );
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, sessionId }));
-  } catch (e) {
-    console.warn(`[sessions.acpClose] cid=${ctx.cid} error: ${e.message}`);
-    res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: false, error: e.message }));
-  } finally {
-    client.stop();
+    return res.end(JSON.stringify({
+      ok: true,
+      dryRun: true,
+      count: targetIds.length,
+      ids: targetIds,
+    }));
   }
+  // Real path: gate with authorize() before touching any session.
+  if (targetIds.length === 0) {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({ ok: true, dryRun: false, deleted: 0, ids: [] }));
+  }
+  const authResult = await authorize("sessions.cleanup-orphans", {
+    cid,
+    orphanCount: targetIds.length,
+    orphanIds: targetIds.slice(0, 32), // truncated for log hygiene
+  });
+  if (!authResult.approved) {
+    console.log(
+      `[cleanup-orphans] cid=${cid} DECLINED count=${targetIds.length} reason=${authResult.decidedBy}`,
+    );
+    res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({
+      ok: false,
+      error: "authorize declined",
+      decidedBy: authResult.decidedBy,
+      decidedAt: authResult.decidedAt,
+    }));
+  }
+  // Write-ahead audit: record the sweep intent BEFORE any per-session
+  // delete runs (each delegated delete writes its own
+  // session.delete.intent / session.delete pair). Failure aborts the
+  // whole sweep — orphan deletion is destructive and must not proceed
+  // unaudited.
+  try {
+    _eventsAppend("sessions.cleanup-orphans.intent", {
+      target: "sessions.cleanup-orphans",
+      cid,
+      actor: "user",
+      payload: {
+        orphanCount: targetIds.length,
+        orphanIds: targetIds.slice(0, 32),
+        decidedBy: authResult.decidedBy,
+      },
+    });
+  } catch (e) {
+    return _auditFail(res, e, "sessions.cleanup-orphans.intent");
+  }
+  // Approved: delegate each delete to handleDeleteSession so the
+  //   existing fan-out / mcode db cleanup / cross-tab reset logic
+  //   stays in one place. We synthesize a minimal `req` with the
+  //   target id so the handler can route as if it came from HTTP.
+  const deleted = [];
+  const failed = [];
+  for (const id of targetIds) {
+    try {
+      const fakeReq = {
+        url: `/api/sessions/${encodeURIComponent(id)}`,
+      };
+      const fakeRes = {
+        _status: 200,
+        _body: "{}",
+        writeHead(s, _h) { this._status = s; },
+        end(b) { this._body = b ? String(b) : "{}"; },
+      };
+      await handleDeleteSession(fakeReq, fakeRes, ctx);
+      // handleDeleteSession already wrote authorize-gated session.delete
+      // events. Parse its result for our summary.
+      let summary = {};
+      try { summary = JSON.parse(fakeRes._body || "{}"); } catch {}
+      if (fakeRes._status === 200 && summary.ok) deleted.push(id);
+      else failed.push({ id, status: fakeRes._status, reason: summary.error || "unknown" });
+    } catch (e) {
+      failed.push({ id, error: e && e.message ? e.message : String(e) });
+    }
+  }
+  console.log(
+    `[cleanup-orphans] cid=${cid} OK deleted=${deleted.length} failed=${failed.length}`,
+  );
+  // Outcome event for the sweep as a whole. Failure → 5xx + alert:
+  // some or all deletes already ran, so the operator must see the
+  // audit gap rather than a silent 200.
+  try {
+    _eventsAppend("sessions.cleanup-orphans.done", {
+      target: "sessions.cleanup-orphans",
+      cid,
+      actor: "user",
+      payload: {
+        deleted: deleted.length,
+        failed: failed.length,
+        decidedBy: authResult.decidedBy,
+      },
+    });
+  } catch (e) {
+    return _auditFail(res, e, "sessions.cleanup-orphans.done");
+  }
+  res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+  return res.end(JSON.stringify({
+    ok: true,
+    dryRun: false,
+    deleted: deleted.length,
+    failed: failed.length,
+    deletedIds: deleted,
+    failedItems: failed,
+    decidedBy: authResult.decidedBy,
+    decidedAt: authResult.decidedAt,
+  }));
 }

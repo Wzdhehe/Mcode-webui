@@ -3,7 +3,7 @@
 Thanks for your interest in Mcode Web UI! This document covers
 the day-to-day contribution workflow. For the bigger picture (plugin
 packaging, release process), see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
-and [`README.md`](README.md).
+and [`plugins/Wzdhehe/mcode-webui/README.md`](plugins/Wzdhehe/mcode-webui/README.md).
 
 ## Code of conduct
 
@@ -24,49 +24,163 @@ Clone and run:
 ```bash
 git clone https://github.com/Wzdhehe/Mcode-webui.git
 cd Mcode-webui
-npm install               # only devDeps (eslint, prettier, c8)
-npm test                  # 382 unit tests + 1 skipped (383 total)
-npm run lint              # eslint flat config, must be 0 warnings
+npm ci                    # devDependencies only (c8 — coverage)
+npm test                  # unit + mocked checks + integration + matrix
+npm run check             # docs / manifest alignment gate
 npm run dev               # node server.js
 # → http://127.0.0.1:8080/
 ```
 
-`npm test` and `npm run lint` **must pass** before opening a PR.
+`npm test` and `npm run check` **must pass** before opening a PR.
+
+## Screenshots
+
+The README references 5 PNGs under `docs/screenshots/` (startup, token
+modal, chat streaming, tool call, session switch). When you make a UI
+change that affects one of those screens:
+
+1. Capture the new screen as PNG (any standard screenshot tool is fine;
+   a 1.5× or 2× DPR capture is preferred for retina display).
+2. Drop the file into `docs/screenshots/` using the existing filename
+   scheme (`NN-<slug>.png`).
+3. Update the alt text and "What it shows" row in
+   [README.md → Screenshots](README.md#screenshots).
+4. Run `npm run check` — the doc-alignment script asserts on the
+   filenames referenced in README; if you rename a file without
+   updating README the check fails.
+
+## Common `npm test` failures
+
+These are the failures that show up most often on PRs. If your
+failure matches one of these, the fix is below — no need to open
+an issue.
+
+### C01. `better_sqlite3_not_loaded` / `Cannot find module 'better-sqlite3'`
+
+`server/lib/db.js` resolves `better-sqlite3` via a hard-coded candidate
+chain (env `MCODE_BETTER_SQLITE3` → `MCODE_CMD` relative → home layout
+→ dev layout). If none of those paths exist on your machine, the
+`server-startup.test.js` and `lib-db.test.js` suites fail with the
+above error.
+
+**Fix**:
+
+1. Find where mcode's bundled `better-sqlite3` actually lives:
+   ```bash
+   find ~/ -path "*/node_modules/better-sqlite3" -type d 2>/dev/null | head -3
+   ```
+2. Point the env at it:
+   ```bash
+   export MCODE_BETTER_SQLITE3=/path/to/better-sqlite3
+   npm test
+   ```
+3. If you can't find any `better-sqlite3` at all, install mcode
+   (npm-global `mcode` or a dev checkout under `~/.minimax-code/`).
+   The test suite skips the sqlite-backed tests when no better-sqlite3
+   is present, so the rest of the suite should still pass.
+
+### C02. Cross-OS path failures (`join` vs `path.posix.join`)
+
+Tests that resolve filesystem paths fail on Windows with
+`TypeError: must be string, not undefined` or
+`EBADF: bad file descriptor`. The cause is usually code that
+calls `path.join` (platform-aware) but the test fixture path was
+built with `path.posix.join` (always `/`), or vice versa.
+
+**Fix**:
+
+- For repo-internal paths (fixtures, temp dirs): use
+  `path.join(import.meta.dirname, ...)` — Node resolves it on both
+  platforms.
+- For user-supplied workspace paths: leave them as the user typed
+  them; let `path.join` do its job.
+- If a test passes on macOS / Linux but fails on Windows AppVeyor,
+  check whether the test does any path comparison (`assert.equal(p, "/tmp/...")`)
+  — replace with `path.normalize(p)` or compare just the basename.
+
+### C03. `mock.module` does not take effect (Node 24.14 pitfall)
+
+Symptom: a test sets up `t.mock.module(...)` for `lib/foo.js` and then
+dynamically imports `lib/foo.js` inside the same `before((t) => ...)` —
+the SUT still imports the real implementation. Only the
+`--experimental-test-module-mocks` flag (`npm test` enables it) makes
+the mock registration take effect.
+
+**Fix**:
+
+- Mocked suites live in `checks/*.check.mjs` (moved out of `test/` by
+  the 2026-09-20 rigor fix: `t.mock.module` needs the flag, and the
+  marketplace root gate executes everything under `test/` flagless).
+  Run them via `npm test`, `npm run test:mocked`, or
+  `node --experimental-test-module-mocks --test checks/<name>.check.mjs`.
+- `test/*.test.js` is the flagless root-gate surface: a
+  `t.mock.module` call added there fails the whole file under the
+  marketplace gate. New flag-dependent tests belong in `checks/`.
+- If you must call `node` directly, use the same flag list as
+  `package.json#scripts.test`.
+
+### C04. `MCODE_RUNTIME_DB` not set → tests mutate the real mavis sqlite
+
+`server-startup.test.js` exercises `runStartupCleanup()` which can
+touch the user's real `~/.minimax/v2/sqlite/runtime-state.sqlite`.
+If you run the suite without `MCODE_RUNTIME_DB` pointed at a temp
+file, the test may delete mcode sessions from your real DB.
+
+**Fix**:
+
+```bash
+export MCODE_RUNTIME_DB="$(mktemp -d)/runtime-state.sqlite"
+touch "$MCODE_RUNTIME_DB"
+npm test
+rm -rf "$(dirname "$MCODE_RUNTIME_DB")"
+```
+
+Nothing sets this env automatically — this plugin has no CI of its
+own (see `docs/CI.md`); set it manually for local test runs.
 
 ## Repository layout
 
-Since v1.1 the repo root **is** the plugin tree (the old
-`plugins/Wzdhehe/mcode-webui/` mirror was retired):
+This repo has a **dual layout** — both copies are kept in sync:
 
 ```
-Mcode-webui/                          # ← dev tree = plugin source
+Mcode-webui/                          # ← the development tree (root)
 ├── server/  public/  test/          # Node + frontend + tests
-├── docs/  references/  skills/mcode-webui/
-├── acp.mjs  server.js  package.json
-├── plugin.json  LICENSE             # official plugin manifests
+├── docs/                            # ARCHITECTURE, API, CAPABILITIES, …
+├── acp.mjs, server.js, package.json
 │
-└── scripts/                         # repo-infra — excluded from packaging
-    └── package-plugin.mjs           #   → dist/Wzdhehe/mcode-webui/
+└── plugins/Wzdhehe/mcode-webui/     # ← the plugin artifact
+    ├── server/  public/  test/      # ↑ real copies, not symlinks
+    ├── docs/  references/  skills/
+    ├── plugin.json  package.json  LICENSE
+    ├── README.md  PR_DESCRIPTION.md
+    └── SKILL.md                    # lives at skills/mcode-webui/SKILL.md
 ```
 
-`npm run package:plugin` assembles the shippable artifact under
-`dist/Wzdhehe/mcode-webui/` (repo-infra files like `scripts/`,
-`node_modules/`, `coverage/`, `dist/`, logs and `docs/PROGRESS.md`
-are excluded); `npm run validate:plugin` validates that artifact
-against the official plugin contract.
+**Why two copies?** The community plugin registry takes the
+`plugins/.../Mcode-webui/` tree as the submission. We keep it as a
+real directory copy (not a junction or symlink — those break
+zip-packaging and confuse `git log`).
+
+The historical `setup:plugin` junction-setup script no longer exists
+in this tree's `package.json`. The current script set is
+`test` / `test:unit` / `test:integration`, `check` / `check:ci`,
+`sbom`, and `coverage` (see `package.json#scripts` and `docs/CI.md`).
 
 ## Editing flow
 
-1. **Edit at the repo root** (`server/`, `public/`, `test/`) — there
-   is no mirror to keep in sync anymore.
-2. **Run the gate**:
+1. **Edit at the repo root** (`server/`, `public/`, `test/`).
+2. **Mirror the change to the plugin tree** — copy the changed files
+   from `<root>/server/...` to `plugins/Wzdhehe/mcode-webui/server/...`,
+   and the same for `public/`, `test/`, `docs/`. (There is no
+   packaging script in the current script set; the sync is manual
+   per PR.)
+3. **Run the gate**:
    ```bash
    npm test
-   npm run lint
-   npm run package:plugin && npm run validate:plugin
+   npm run check
    ```
-3. **Commit** with a conventional message (see below).
-4. **Push** to a feature branch and open a PR.
+4. **Commit** with a conventional message (see below).
+5. **Push** to a feature branch and open a PR.
 
 ## Commit message format
 
@@ -102,17 +216,18 @@ practice; log + continue.
 
 ## Pull request checklist
 
-- [ ] `npm test` passes
-- [ ] `npm run lint` is clean (0 warnings)
-- [ ] `npm run package:plugin && npm run validate:plugin` is clean
-      (mirrors official gate, validates the dist artifact)
+- [ ] `npm test` passes (with `--experimental-test-module-mocks`)
+- [ ] Flagless `node --test` also passes (dual-mode requirement — see
+      `docs/CI.md`)
+- [ ] `npm run check` is clean (docs / manifest alignment gate)
+- [ ] Plugin tree (`plugins/.../Mcode-webui/`) is in sync with root
 - [ ] No personal data in commit content (no IPs, no usernames, no
       real session IDs)
 - [ ] New env vars documented in `docs/API.md` and `plugin.json`
 - [ ] New endpoints / events documented in `docs/API.md`
 - [ ] `CHANGELOG.md` updated under an "Unreleased" section
 - [ ] If destructive behavior changes, the security note
-      `references/SECURITY-NOTES.md` is updated (and
+      `plugins/.../references/SECURITY-NOTES.md` is updated (and
       `plugin.json`'s `extensions.securityNotes` summary stays in sync)
 
 ## Adding a new route / event / panel
@@ -146,15 +261,15 @@ short version:
 
 ## Release process
 
-1. Bump `version` in `package.json` (root).
+1. Bump `version` in `package.json` (root + plugin copy).
 2. Move "Unreleased" section in `CHANGELOG.md` to a dated
    versioned section.
-3. `npm run package:plugin` — produces `dist/Wzdhehe/mcode-webui/`
-   + `dist/Wzdhehe/mcode-webui.zip` from the root tree.
+3. Package the plugin tree. There is no `package:plugin` script in
+   the current script set; the `plugins/Wzdhehe/mcode-webui/` tree
+   itself is the submission artifact (see step 4).
 4. Open a PR to the community registry
    [`MiniMax-AI/MiniMax-Code-Plugins`](https://github.com/MiniMax-AI/MiniMax-Code-Plugins)
-   adding the packaged tree as `plugins/Wzdhehe/mcode-webui/`
-   (copy the contents of `dist/Wzdhehe/mcode-webui/` — per the
+   adding only the `plugins/Wzdhehe/mcode-webui/` tree (per the
    "one folder = one plugin" model — see the official README).
 5. Tag the release: `git tag v1.X.Y && git push --tags`.
 

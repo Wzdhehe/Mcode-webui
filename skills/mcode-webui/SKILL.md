@@ -35,7 +35,7 @@ the mcode agent runtime, or anything not about the webui HTTP/SSE server.
 
 ## Capabilities
 
-18 capabilities, all implemented and live in v1.0.2:
+13 capabilities, all implemented and live in v1.0:
 
 - **chat-streaming** — SSE-delivered streamed model output
 - **tool-execution** — bash / edit / read tool events shown inline
@@ -50,11 +50,6 @@ the mcode agent runtime, or anything not about the webui HTTP/SSE server.
 - **lan-sharing** — `0.0.0.0` bind, optional `TOKEN` auth
 - **token-auth** — `?token=` query + `Authorization: Bearer` header
 - **mobile-responsive** — viewport + touch gestures
-- **v1.0.2 session-fork** (mcode 0.2.4+) — `session/fork` RPC, 从指定消息分叉新会话
-- **v1.0.2 session-queue** (mcode 0.2.4+) — `session/queue` RPC, LLM 响应中可排队/改写/删除消息
-- **v1.0.2 session-steering** (mcode 0.2.4+) — `session/steer` RPC, 引导当前 turn 不打断
-- **v1.0.2 session-resume** (mcode 0.2.4+) — `session/resume` RPC, 接续历史 session (Ctrl+U 走 Round 7)
-- **v1.0.2 mode-switch** (mcode 0.2.4+) — `session/set_mode` + `session/set_config_option` RPC, 切 plan/permission/model
 
 ## Configuration (Environment Variables)
 
@@ -159,9 +154,11 @@ contribution workflow, see `docs/DEVELOPMENT.md`.
   been expanded). Keep both copies in sync when editing — the plugin tree is
   the source of truth for the release artifact.
 - **For release** (the artifact pushed to the community plugin repo):
-  `npm run package:plugin` copies the plugin tree into a real `dist/Wzdhehe/
-  Mcode-webui/` tree and zips it, verifying the output contains zero
-  symlinks/junctions, satisfying the mcode-plugin-guide contract.
+  the `plugins/Wzdhehe/mcode-webui/` tree itself is the submission
+  artifact (one folder = one plugin). There is no `package:plugin`
+  packaging script in the current script set.
 
-`npm run setup:plugin` is the historical junction-setup script; on the
-current layout it is a no-op for existing directories.
+The historical `setup:plugin` junction-setup script no longer exists
+in this tree's `package.json`. The current script set is
+`test` / `test:unit` / `test:integration`, `check` / `check:ci`,
+`sbom`, and `coverage` (see `package.json#scripts` and `docs/CI.md`).

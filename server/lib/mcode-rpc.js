@@ -35,13 +35,14 @@ function fail(error, code) {
   return { ok: false, error: sanitizeError(error), code: code || "rpc_error" };
 }
 
-// mcode acp 不支持的方法 (实探测得, 2026-08-20; v1.0.2 清理 — 0.2.4 已支持的部分移除)
-//  仍不支持: set_mode / set_config_option / activate / delete
-//  0.2.4 已支持: cancel / fork / resume (mcode acp 真实实现, cli.js grep 验证)
+// mcode 0.1.5 acp 不支持的方法 (实探测得, 2026-08-20)
 const UNSUPPORTED = new Set([
   "session/set_mode",
   "session/set_config_option",
+  "session/cancel",
   "session/activate",
+  "session/fork",
+  "session/resume",
   "session/delete",
 ]);
 
@@ -157,17 +158,15 @@ export async function listSessions() {
 }
 
 // ============================================================
-// mcode acp 接受的能力清单 (供前端 capability detection)
-// v1.0.2: mcode 0.2.4 已支持 cancel / fork / resume, 更新为 true
-// 仍不支持: set_mode / set_config_option / activate / delete
+// mcode 0.1.5 acp 接受的能力清单 (供前端 capability detection)
 // ============================================================
 export const MCODE_ACP_CAPABILITIES = {
   set_mode: false,
   set_config_option: false,
-  cancel: true, // v1.0.2: mcode 0.2.4 实测支持
+  cancel: false,
   activate: false,
-  fork: true, // v1.0.2: mcode 0.2.4 实测支持
-  resume: true, // v1.0.2: mcode 0.2.4 实测支持
+  fork: false,
+  resume: false,
   delete: false,
   load: true,
   close: true,

@@ -1,32 +1,26 @@
 // webui/public/app/render.js — REFACTORING.md batch 4 step 2
 // Owns: all render* functions, session list + actions, chat message
-// parsing/rendering, ask-modal cluster, collapsed-workspace prefs.
+// parsing/rendering, ask-modal cluster, auth-modal (authorize) cluster,
+// collapsed-workspace prefs.
 
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
-import { setLeftOpen, setRightOpen, API_SUFFIX, sidebarReady, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, connect, es, getGeneralQuota, leftOpen, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
-import { SLASH_COMMANDS, SLASH_SKILLS, attachEvents, attachModalEvents, attachedFiles, attachmentList, autoResize, checkModals, fileInput, filterSlash, hideMode, hidePerm, hidePlan, hidePlanMode, hideSettings, hideSlash, isSending, lastShownPermKey, lastShownPlanKey, lastShownPlanModeKey, modeOpen, modePopover, moveSlash, permOpen, planModeOpen, planOpen, planSending, queueDeleteItem, queueSteerItem, removeAttachment, renderAttachments, renderPerm, renderPlan, selectSlash, send, sendPermAnswer, sendPlanAnswer, sendPlanModeAnswer, setMode, settingsMenu, showPerm, showPlan, showPlanMode, showSlash, slashActiveIdx, slashFiltered, slashInput, slashOpen, slashOverlay, slashQuery, slashResults, stopExec, startAskCountdown, stopAskCountdown, toggleLang, toggleMode, toggleSettings, uploadFiles } from './events.js'
-
-// v1.0.1 round 8: when the server rotates the token (POST /api/settings
-// {resetToken: true}) it broadcasts an SSE event `auth.token_rotated`.
-// state.js#connect handles the event and dispatches a `webui:token_rotated`
-// CustomEvent on window. We listen here and tell the user (toast) that
-// the new token is available out-of-band (server stdout or
-// ~/.mcode-webui/settings.json) and they need to re-open the URL with
-// `?token=<new-value>`. We do NOT auto-update HEADERS — round 8 made
-// the new value impossible to obtain via HTTP/SSE, so the user must
-// perform the re-open step.
-if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-  window.addEventListener('webui:token_rotated', () => {
-    try {
-      const msg = (typeof t === 'function' && t('token_rotated_toast'))
-        || 'Token 已轮换 — 请从 server stdout 或 ~/.mcode-webui/settings.json 读取新 token，然后重新打开 URL（含 ?token=...）'
-      // showToast is a long-lived utility; default 2200ms is too short
-      // for an actionable message, bump to 8s.
-      showToast(msg, 8000)
-    } catch (e) { console.error('[webui] token rotated toast failed', e) }
-  })
-}
+import { setLeftOpen, setRightOpen, API_SUFFIX, sidebarReady, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, connect, es, getAlerts, getAlertsUnread, getGeneralQuota, getPendingAuthRequests, leftOpen, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
+import { SLASH_COMMANDS, SLASH_SKILLS, attachEvents, attachModalEvents, attachedFiles, attachmentList, autoResize, checkModals, fileInput, filterSlash, hideMode, hidePerm, hidePlan, hidePlanMode, hideSettings, hideSlash, isSending, lastShownPermKey, lastShownPlanKey, lastShownPlanModeKey, modeOpen, modePopover, moveSlash, permOpen, planModeOpen, planOpen, planSending, removeAttachment, renderAttachments, renderPerm, renderPlan, selectSlash, send, sendPermAnswer, sendPlanAnswer, sendPlanModeAnswer, setMode, settingsMenu, showPerm, showPlan, showPlanMode, showSlash, slashActiveIdx, slashFiltered, slashInput, slashOpen, slashOverlay, slashQuery, slashResults, stopExec, toggleLang, toggleMode, toggleSettings, uploadFiles } from './events.js'
+// v2 (Lease C04): chat-list virtualization. The pure-logic helpers
+//   (computeVirtualWindow / decideScrollBehavior / isNearBottom /
+//   estimateDomNodeCount) live in chat-virtual-list.js — testable in
+//   Node without jsdom (see test/chat-virtual-list.test.js). This file
+//   wires the DOM side: scroll/resize listeners, spacer divs, slice +
+//   re-render on scroll.
+import {
+    computeVirtualWindow,
+    decideScrollBehavior,
+    isNearBottom,
+    ESTIMATED_MESSAGE_HEIGHT,
+    VIRTUAL_LIST_BUFFER,
+    VIRTUAL_LIST_THRESHOLD,
+} from './chat-virtual-list.js'
 
 // v0.5.ax: 欢迎页时隐藏右侧栏（chat-area 居中铺满）
 export function hideRightForWelcome(isWelcome) {
@@ -185,12 +179,8 @@ export function render() {
   // Context right (real-time usage + TPS)
   renderContext()
 
-  // Goal (dynamic, legacy cs.goal shape)
+  // Goal (dynamic)
   renderGoal()
-
-  // v1.0.2 Round 6: Goal budget bar (新 shape: cs.goalBudget) + Delegation card
-  renderGoalBudgetBar()
-  renderDelegationCard()
 
   // Todo (dynamic)
   renderTodo()
@@ -200,9 +190,6 @@ export function render() {
   // Sessions list (左栏 RECENT)
   renderSessions()
 
-  // v1.1: 队列徽标 + 队列清单 (R5 建好 DOM/CSS, v1.1 接上数据源)
-  renderQueue()
-
   // Quota card (左下角, btn-menu 风格 + popover, mmx 直拉 + 本机时间)
   renderUsage()
 
@@ -211,44 +198,11 @@ export function render() {
 
   // Modals (v0.4.0)
   checkModals()
-}
-
-// v1.1: 队列徽标 + 队列清单 — R5 建好 DOM/CSS 但一直没有渲染函数。
-// 数据源 state.mcodeQueue: 0.2.x 来自 queue_update 推送; 0.3+ 无推送
-// (probe 实测), 由 events.js refreshQueueList() 在变更后主动拉取。
-export function renderQueue() {
-  const wrap = document.getElementById('queue-badge-wrap')
-  const badgeCount = document.getElementById('queue-badge-count')
-  const listItems = document.getElementById('queue-list-items')
-  const listEmpty = document.getElementById('queue-list-empty')
-  if (!wrap || !badgeCount || !listItems || !listEmpty) return
-  const items = Array.isArray(state?.mcodeQueue) ? state.mcodeQueue : []
-  wrap.hidden = items.length === 0
-  badgeCount.textContent = String(items.length)
-  listEmpty.hidden = items.length > 0
-  listItems.innerHTML = items.map((it) => {
-    const id = String(it.itemId || it.id || '').replace(/"/g, '&quot;')
-    const text = String(it.text || it.content || '')
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-    if (!id) return ''
-    return '<div class="queue-item" data-item-id="' + id + '">' +
-      '<span class="queue-item-text">' + text + '</span>' +
-      '<span class="queue-item-actions">' +
-      '<button class="queue-item-btn" data-act="steer">' + t('queue_steer') + '</button>' +
-      '<button class="queue-item-btn" data-act="delete">' + t('queue_delete') + '</button>' +
-      '</span></div>'
-  }).join('')
-  listItems.querySelectorAll('.queue-item-btn').forEach((btn) => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation()
-      const itemEl = btn.closest('.queue-item')
-      const itemId = itemEl?.getAttribute('data-item-id')
-      if (!itemId) return
-      const act = btn.getAttribute('data-act')
-      if (act === 'delete') await queueDeleteItem(itemId)
-      if (act === 'steer') await queueSteerItem(itemId)
-    })
-  })
+  // v2 (2026-09-20 webui-manual-audit): keep the authorize modal fresh
+  // through full re-renders (language toggle / state pushes refresh the
+  // dynamic action + ctx labels through here). Idempotent — closes
+  // itself when the pending queue is empty.
+  renderAuthModal()
 }
 
 export function renderRight() {
@@ -393,79 +347,6 @@ export function renderGoal() {
   }
 }
 
-// v1.0.2 Round 6: 新 Goal budget bar (state.goalBudget 形状, 跟旧 state.goal 不同)
-//   state.goalBudget = { used, total, status: 'active'|'paused'|'blocked'|'complete'|'budget_limited' }
-export function renderGoalBudgetBar() {
-  const bar = document.getElementById('goal-bar')
-  if (!bar) return
-  const g = state?.goalBudget
-  if (!g) {
-    bar.hidden = true
-    return
-  }
-  const status = g.status || 'active'
-  const used = Number(g.used) || 0
-  const total = Number(g.total) || 0
-  const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0
-  const statusText = t(`goal_budget_status_${status}`) || status
-  bar.hidden = false
-  const fill = document.getElementById('goal-bar-fill')
-  if (fill) {
-    fill.style.width = `${pct}%`
-    fill.setAttribute('data-status', status)
-  }
-  const statusEl = document.getElementById('goal-bar-status')
-  if (statusEl) {
-    statusEl.textContent = statusText
-    statusEl.setAttribute('data-status', status)
-  }
-  const usageEl = document.getElementById('goal-bar-usage')
-  if (usageEl) {
-    usageEl.textContent = `${used} / ${total} (${pct}%)`
-  }
-  // 完成 / budget_limited 状态弹 toast (一次, 用 sessionStorage 标记防重弹)
-  if (status === 'complete') showGoalToastOnce('complete', t('goal_complete_toast'))
-  else if (status === 'budget_limited') showGoalToastOnce('budget_limited', t('goal_budget_limited_toast'))
-}
-
-function showGoalToastOnce(key, msg) {
-  try {
-    const flag = 'webui_goal_toast_' + key
-    if (sessionStorage.getItem(flag)) return
-    sessionStorage.setItem(flag, '1')
-    if (typeof showToast === 'function') showToast(msg, 4000)
-  } catch {}
-}
-
-// v1.0.2 Round 6: Delegation card (子任务快照)
-//   state.activeDelegations = [{ delegationId, agent, status, ... }]
-export function renderDelegationCard() {
-  const card = document.getElementById('delegation-card')
-  if (!card) return
-  const dels = Array.isArray(state?.activeDelegations) ? state.activeDelegations : []
-  const items = document.getElementById('delegation-card-items')
-  const empty = card.querySelector('.delegation-card-empty')
-  if (dels.length === 0) {
-    if (items) items.innerHTML = ''
-    if (empty) empty.hidden = false
-    card.hidden = true
-    return
-  }
-  card.hidden = false
-  if (empty) empty.hidden = true
-  if (items) {
-    items.innerHTML = dels.map((d) => {
-      // v1.0.2 R6 audit fix: escapeHtml 防 XSS (status + agent 都从 mcode 流入)
-      const agent = escapeHtml(d.agent || d.name || 'agent')
-      const status = escapeHtml(d.status || 'active')
-      return `<div class="delegation-item">
-        <span class="delegation-item-status" data-status="${status}"></span>
-        <span class="delegation-item-agent">${agent}</span>
-      </div>`
-    }).join('')
-  }
-}
-
 export function renderTodo() {
   const section = document.getElementById('r-todo-section')
   const list = state?.todo || []
@@ -529,16 +410,9 @@ export function renderLanCardContent(s) {
       lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">— ${escapeHtml(t('lan_card_token_disabled') || 'Token 鉴权已关闭')}</span>`
     }
   } else if (!hasToken) {
-    // (b) Token not in /api/settings response — v1.0.1 round 8:
-    //   the server NO LONGER returns the token in HTTP responses
-    //   (closes the cross-origin bootstrap-token leak — see
-    //   SECURITY-NOTES §10). The user reads the token from
-    //   server stdout or ~/.mcode-webui/settings.json; the SPA only
-    //   needs to know that the token is "configured server-side" and
-    //   not display it. The placeholder text now points the user to
-    //   the two out-of-band delivery channels.
+    // (b) After acknowledge (or no token on server) — show placeholder
     if (lanCardTokenRow) {
-      lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">✓ ${escapeHtml(t('lan_card_token_saved_v2') || '已保存 (stdout / ~/.mcode-webui/settings.json)')}</span>`
+      lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">✓ ${escapeHtml(t('lan_card_token_saved') || '已保存')}</span>`
     }
   } else {
     // (a) Token available — make sure mask+value+buttons are rendered
@@ -670,6 +544,74 @@ export function renderSessions() {
       return title.includes(q) || s.id.toLowerCase().includes(q)
     })
   }
+  // Lease C05: cross-workspace search. When q is set, fetch from
+  //   /api/sessions/search and merge results into the list. The
+  //   fetch is debounced (q changes per keystroke — we only want one
+  //   in flight at a time) and the result is stored in a module-level
+  //   cache so subsequent renderSessions() calls can show it without
+  //   re-fetching.
+  //
+  //   Token-based race guard: _c05SearchToken is bumped on every
+  //   render so an in-flight earlier call cannot overwrite a later
+  //   result.
+  if (q) {
+    const token = (renderSessions._c05SearchToken = (renderSessions._c05SearchToken || 0) + 1)
+    // Schedule the fetch on the next tick so we don't fire on the
+    //   initial empty-list render that runs immediately after setSearchQuery.
+    //   _c05SearchLastQ caches the query we last fired for so we don't
+    //   re-fire identical queries.
+    const lastQ = renderSessions._c05SearchLastQ
+    const lastT = renderSessions._c05SearchLastToken
+    if (typeof fetch === 'function' && (lastQ !== q || lastT !== token - 1 || !renderSessions._c05SearchInFlight)) {
+      // Only fire if the query changed since the last successful
+      //   fetch (avoids refetch on every render). Compare via q.
+      if (lastQ !== q) {
+        renderSessions._c05SearchLastQ = q
+        renderSessions._c05SearchInFlight = true
+        const searchUrl = '/api/sessions/search?q=' + encodeURIComponent(q) + '&limit=20'
+        try {
+          fetch(searchUrl, { headers: HEADERS })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              renderSessions._c05SearchInFlight = false
+              if (renderSessions._c05SearchToken !== token) return // raced
+              renderSessions._c05SearchResults = (data && data.ok && Array.isArray(data.results)) ? data.results : []
+              renderSessions()
+            })
+            .catch(() => { renderSessions._c05SearchInFlight = false })
+        } catch { renderSessions._c05SearchInFlight = false }
+      }
+    }
+    // Merge cached API results into the local filtered list.
+    //   Each result row carries its workspace so the sidebar shows
+    //   which workspace it came from (workspace prefix on the title
+    //   row, per task spec §"跨 workspace 展示").
+    const cached = Array.isArray(renderSessions._c05SearchResults) ? renderSessions._c05SearchResults : []
+    if (cached.length > 0) {
+      const ids = new Set(filtered.map(s => s.id))
+      for (const r of cached) {
+        if (!r || !r.id || ids.has(r.id)) continue
+        ids.add(r.id)
+        const ws = r.workspace || ''
+        const wsShort = ws ? ws.split(/[\\/]/).filter(Boolean).slice(-1)[0] : ''
+        filtered.push({
+          id: r.id,
+          kind: 'c05-search',
+          title: r.title || '(untitled)',
+          workspace: ws,
+          updatedAt: r.updatedAt || 0,
+          matchScore: r.matchScore || 0,
+          _wsShort: wsShort,
+        })
+      }
+    }
+  } else {
+    // Empty q: clear the cache so a future search starts fresh.
+    if (renderSessions._c05SearchResults && renderSessions._c05SearchResults.length > 0) {
+      renderSessions._c05SearchResults = []
+    }
+    renderSessions._c05SearchLastQ = ''
+  }
   if (filtered.length === 0) {
     const msg = q ? (currentLang === 'zh' ? '没有匹配的会话' : 'No matching sessions') : t('no_sessions')
     list.innerHTML = `<div class="session-title-empty">${msg}</div>`
@@ -714,10 +656,18 @@ export function renderSessions() {
       //   之前 v0.5.bv 写死不显示是因为 webui 没能力删 mcode session; 现在能了
       //   删 mcode session 走 server DELETE → SQL 删 mcode db (8 张表事务), 不依赖 mcode TUI
       const deleteBtn = `<button class="session-delete" data-id="${escapeHtml(s.id)}" title="${t('session_delete')}">×</button>`
+      // Lease C05: cross-workspace search results get a small
+      //   "[ws-short]" prefix on the title row so the user can see
+      //   which workspace each match came from. Only the rows whose
+      //   `kind` is 'c05-search' (i.e. surfaced via /api/sessions/search
+      //   and not already in the in-memory list) get the prefix.
+      const c05Prefix = s.kind === 'c05-search' && s._wsShort
+        ? `<span class="session-c05-prefix">[${escapeHtml(s._wsShort)}]</span> `
+        : ''
       return `<div class="session-item${active}" data-id="${escapeHtml(s.id)}" data-kind="${s.kind}" title="${escapeHtml(title)}">
         <div class="session-dot"></div>
         <div class="session-info">
-          <div class="session-name">${short}</div>
+          <div class="session-name">${c05Prefix}${short}</div>
           <div class="session-id">${idLabel}</div>
         </div>
         ${deleteBtn}
@@ -772,7 +722,22 @@ export function renderSessions() {
       item.classList.add('confirming')
       const bar = document.createElement('div')
       bar.className = 'session-confirm'
-      bar.innerHTML = `<span>${t('session_delete_confirm')}</span><button class="session-confirm-yes" data-id="${btn.getAttribute('data-id')}">${t('session_delete_yes')}</button><button class="session-confirm-no" title="${t('session_delete_cancel')}">×</button>`
+      // DOM 构造替代 innerHTML 拼串：data-id 取自 DOM attribute（不可信），
+      // 直接插进 HTML 属性位带引号即可破属性注入（CodeQL js/xss-through-dom）。
+      // textContent 与 setAttribute 零 HTML 解析，结构与 class 与文案不变。
+      const confirmText = document.createElement('span')
+      confirmText.textContent = t('session_delete_confirm')
+      const yesBtn = document.createElement('button')
+      yesBtn.className = 'session-confirm-yes'
+      yesBtn.setAttribute('data-id', btn.getAttribute('data-id'))
+      yesBtn.textContent = t('session_delete_yes')
+      const noBtn = document.createElement('button')
+      noBtn.className = 'session-confirm-no'
+      noBtn.setAttribute('title', t('session_delete_cancel'))
+      noBtn.textContent = '×'
+      bar.appendChild(confirmText)
+      bar.appendChild(yesBtn)
+      bar.appendChild(noBtn)
       item.appendChild(bar)
       const timer = setTimeout(() => cancelConfirm(item), 5000)
       item._confirmTimer = timer
@@ -927,9 +892,124 @@ export function renderUserFooter() {
 // v0.5.ak: User footer 已改为静态 GitHub 链接，renderUserFooter / startUserFooterTicker 不再需要
 // 保留 renderUserFooter 旧定义兼容（CSS 已 hide 其内容），但不再被调用
 
+// ============================================================
+// v2 (Lease C04): chat-list virtualization
+// ============================================================
+//
+// The full chat is held in state.chat (lines from acp event stream).
+// For chats with N ≥ 200 messages, rendering the full list every time
+// state changes (≈ every chat delta / quota refresh / token rotation)
+// becomes a hot spot — DOM creation cost dominates the main thread.
+//
+// The virtual list keeps the DOM bounded: it renders only the slice
+// that's currently visible (plus a ±50 message buffer), with two
+// spacer divs (top + bottom) sized so the scrollbar represents the
+// full chat. The visible window recomputes on scroll / resize via a
+// requestAnimationFrame-coalesced handler.
+//
+// Below the threshold (N < 200) we fall back to the legacy full
+// render — the overhead of setting up virtual (spacers, scroll
+// handler, sliced re-render) isn't worth it for short chats.
+//
+// Pure logic (window computation, scroll-behavior decision, perf
+// estimator) lives in chat-virtual-list.js — see
+// test/chat-virtual-list.test.js for the math contract.
+
+// Module-scoped state for the virtual list. Single-tab process, no
+// need to make this per-cid — each tab renders its own chat via
+// its own render.js instance anyway (per-cid SSE channel).
+let __chatVirtualEnabled = false
+let __chatVirtualRAF = null
+let __chatScrollHandlerInstalled = false
+let __chatScrollState = { scrollTop: 0, clientHeight: 600 }
+// Cache the latest parsed messages + latestAskIdx so the scroll
+// handler can re-render without re-parsing the chat lines on every
+// scroll tick. parseChatLines is O(N) and the scroll handler fires
+// per frame — caching is the difference between 60Hz re-parses and
+// zero re-parses during a scroll gesture.
+let __chatMessagesCache = null
+let __chatLatestAskIdx = -1
+
+function __renderSlicedInto(inner, slice, sliceStartIdx, latestAskIdx) {
+    const msgContainer = inner.querySelector('.chat-virtual-messages')
+    const html = slice
+        .map((m, i) =>
+            renderMessage(m, { isLatestAsk: (sliceStartIdx + i) === latestAskIdx }),
+        )
+        .join('')
+    if (msgContainer) {
+        msgContainer.innerHTML = html
+    } else {
+        inner.innerHTML = html
+    }
+    attachStructuredBlockHandlers(inner)
+}
+
+function __renderVirtualInto(inner, messages, latestAskIdx, scrollEl) {
+    // Capture scroll metrics at the moment of render so the slice
+    // matches what the user is looking at right now.
+    __chatScrollState = {
+        scrollTop: scrollEl.scrollTop,
+        clientHeight: scrollEl.clientHeight,
+    }
+    const w = computeVirtualWindow({
+        totalCount: messages.length,
+        scrollTop: __chatScrollState.scrollTop,
+        clientHeight: __chatScrollState.clientHeight,
+    })
+    const slice = messages.slice(w.startIdx, w.endIdx)
+    // Two spacer divs + a messages container. Re-renders only rewrite
+    // .chat-virtual-messages' innerHTML, preserving the spacers — so
+    // scrollTop stays anchored on the user-visible messages.
+    inner.innerHTML =
+        `<div class="chat-virtual-spacer" data-role="top" style="height:${w.topSpacer}px;flex-shrink:0"></div>` +
+        `<div class="chat-virtual-messages">` +
+        slice.map((m, i) =>
+            renderMessage(m, { isLatestAsk: (w.startIdx + i) === latestAskIdx }),
+        ).join('') +
+        `</div>` +
+        `<div class="chat-virtual-spacer" data-role="bottom" style="height:${w.bottomSpacer}px;flex-shrink:0"></div>`
+    attachStructuredBlockHandlers(inner)
+}
+
+function __installChatScrollHandler(scrollEl, inner) {
+    if (__chatScrollHandlerInstalled) return
+    __chatScrollHandlerInstalled = true
+    // rAF-coalesced scroll handler: per scroll-tick, recompute the
+    // visible window and re-render the message container. rAF caps
+    // re-renders at one per frame even if the browser fires scroll
+    // 100x during a smooth-scroll gesture.
+    scrollEl.addEventListener('scroll', () => {
+        __chatScrollState = {
+            scrollTop: scrollEl.scrollTop,
+            clientHeight: scrollEl.clientHeight,
+        }
+        if (__chatVirtualRAF !== null) return
+        if (typeof requestAnimationFrame !== 'function') return
+        __chatVirtualRAF = requestAnimationFrame(() => {
+            __chatVirtualRAF = null
+            if (!__chatVirtualEnabled || !__chatMessagesCache) return
+            const startIdx = Math.max(0, Math.floor(__chatScrollState.scrollTop / ESTIMATED_MESSAGE_HEIGHT) - VIRTUAL_LIST_BUFFER)
+            const endIdx = Math.min(
+                __chatMessagesCache.length,
+                Math.ceil((__chatScrollState.scrollTop + __chatScrollState.clientHeight) / ESTIMATED_MESSAGE_HEIGHT) + VIRTUAL_LIST_BUFFER,
+            )
+            const slice = __chatMessagesCache.slice(startIdx, endIdx)
+            __renderSlicedInto(inner, slice, startIdx, __chatLatestAskIdx)
+        })
+    }, { passive: true })
+    // Window resize → recompute visible window (clientHeight changed).
+    window.addEventListener('resize', () => {
+        __chatScrollState.clientHeight = scrollEl.clientHeight
+        if (!__chatVirtualEnabled || !__chatMessagesCache) return
+        __renderVirtualInto(inner, __chatMessagesCache, __chatLatestAskIdx, scrollEl)
+    })
+}
+
 export function renderChat() {
   const inner = document.getElementById('chat-inner')
   const empty = document.getElementById('chat-empty')
+  const scroll = document.getElementById('chat-scroll')
   let lines = state?.chat || []
   // 过滤掉 mcode TUI 的 placeholder / 空 prompt 标记（shim 偶尔会误抓）
   lines = lines.filter(l => {
@@ -950,6 +1030,10 @@ export function renderChat() {
     if (empty) empty.style.display = ''
     // v0.5.x: 切到空 chat 的 session 时必须清空 inner，否则会残留上一个 session 的 messages
     if (inner) inner.innerHTML = ''
+    // v2 (Lease C04): drop virtual list state — empty chat renders as welcome page.
+    __chatVirtualEnabled = false
+    __chatMessagesCache = null
+    __chatLatestAskIdx = -1
     // v0.5.ae: 空 chat 时清空 right panel todo
     if (state) { state.todo = []; renderTodo() }
     // v0.5.ax: 欢迎页时隐藏右侧栏
@@ -996,10 +1080,44 @@ export function renderChat() {
       break
     }
   }
-  // 渲染时把 isLatestAsk 透传给 renderMessage
-  inner.innerHTML = messages.map((m, i) => renderMessage(m, { isLatestAsk: i === latestAskIdx })).join('')
-  // v0.5.ab: 绑定 Ask/Plan 块的点击事件（事件委托）
-  attachStructuredBlockHandlers(inner)
+  // Cache for scroll-handler re-renders (avoids re-parseChatLines on
+  // every scroll tick — slice() is O(K) where K ≈ buffer * 2 ≪ N).
+  __chatMessagesCache = messages
+  __chatLatestAskIdx = latestAskIdx
+
+  // v2 (Lease C04): virtual list branch — only when N ≥ threshold.
+  // Below threshold the legacy full-render wins (cheaper + simpler).
+  if (messages.length >= VIRTUAL_LIST_THRESHOLD) {
+    __chatVirtualEnabled = true
+    __installChatScrollHandler(scroll, inner)
+    // Decide scroll behavior BEFORE the spacer rewrite so we can
+    // compare the user's pre-render position to the new bottom.
+    const decision = decideScrollBehavior({
+      scrollTop: scroll.scrollTop,
+      clientHeight: scroll.clientHeight,
+      scrollHeight: scroll.scrollHeight,
+    })
+    __renderVirtualInto(inner, messages, latestAskIdx, scroll)
+    if (decision === 'auto') {
+      // User was near the bottom — keep them there. The new message
+      // (if any) will be visible because the bottom spacer shrank.
+      scroll.scrollTop = scroll.scrollHeight
+    }
+    // 'preserve' branch: do NOT touch scrollTop. The spacer heights
+    // will shift slightly but the user's px position is preserved,
+    // and the user remains anchored to the same approximate message
+    // index. (A perfect "lock onto the same message index" would
+    // require knowing each rendered message's real height — out of
+    // scope for the fixed-row virtual list model.)
+  } else {
+    __chatVirtualEnabled = false
+    // 渲染时把 isLatestAsk 透传给 renderMessage
+    inner.innerHTML = messages.map((m, i) => renderMessage(m, { isLatestAsk: i === latestAskIdx })).join('')
+    // v0.5.ab: 绑定 Ask/Plan 块的点击事件（事件委托）
+    attachStructuredBlockHandlers(inner)
+    // scroll to bottom
+    scroll.scrollTop = scroll.scrollHeight
+  }
   // v0.5.ae: 把 chat 内的 todo block 实时同步到 state.todo（right panel 用）
   // dedup by text：同一个 todo 在多轮里可能重复，最后一次状态生效
   if (state) {
@@ -1018,9 +1136,6 @@ export function renderChat() {
     state.todo = todos
     renderTodo()
   }
-  // scroll to bottom
-  const scroll = document.getElementById('chat-scroll')
-  scroll.scrollTop = scroll.scrollHeight
 }
 
 // v0.5.ab: 事件委托 — Ask 选项点击发送 / Plan 选项点击发送 / "查看完整计划" 打开弹窗
@@ -1384,11 +1499,6 @@ export function openAskModal(pq, opts) {
   const inputArea = document.querySelector('.input-area')
   if (inputArea) inputArea.style.display = 'none'
   renderAskModalContent()
-  // v1.0.2 Round 6: 启动 30s 倒计时 (mcode 0.2.4 文档没列 countdown 事件, 客户端兜底)
-  //   到 0 自动调 sendAskAnswer (用 default 选项, 走 askModalNextOrSend 模板化)
-  if (typeof startAskCountdown === 'function') {
-    try { startAskCountdown(30) } catch (e) { console.warn('[ask] start countdown:', e) }
-  }
 }
 
 export function closeAskModal() {
@@ -1405,10 +1515,6 @@ export function closeAskModal() {
   // 清空 other input
   const other = document.getElementById('ask-modal-other')
   if (other) other.value = ''
-  // v1.0.2 Round 6: 关弹窗时停倒计时
-  if (typeof stopAskCountdown === 'function') {
-    try { stopAskCountdown() } catch (e) { console.warn('[ask] stop countdown:', e) }
-  }
   // v0.5.bx-28: 防御性清 pendingAskUser — 任何关弹窗路径 (X / Esc / 背景 / 切会话) 都要清,
   //   否则 send() 会把后续正常消息包成 Q/A 模板 ("Q: <question>\nA: <user input>")
   //   X / Esc / 背景 现在都绑 closeAskModal (不再过 askModalSkip), 语义是"我放弃这题, 让我正常发消息"
@@ -1626,6 +1732,313 @@ export function bindAskModal() {
 }
 // v0.5.bx-13: 立即绑定弹窗 (modal HTML 已在 script 之前, 直接能 getElementById)
 bindAskModal()
+
+// ============================================================
+// v2 (2026-09-20 webui-manual-audit): authorize modal — begin auth-modal
+//
+// Per-request authorization gate UI (server/lib/authorize.js, Lease B03).
+// Follows the ask_user modal pattern: static markup in index.html
+// (#auth-modal), module-level state that survives re-renders, display
+// toggling, bind-once wiring (events.js attachModalEvents).
+//
+// Deliberate difference from the ask_user modal: NO dismiss path (no ×
+// button, no backdrop click, no Esc). Closing without deciding would
+// strand the request until the server's 5-minute timeout with no way to
+// re-open the modal; Deny is the explicit "no" and stays one click away.
+// Fail-closed by design (ANTI-PATTERNS-FIX-PLAN §AP6/§AP10).
+//
+// SECURITY (CodeQL js/xss-through-dom): requestId / action / ctx come
+// off the SSE wire — untrusted. Everything dynamic is built with DOM
+// construction + textContent, never innerHTML with interpolated values
+// (same style as the session-confirm bar, see render-static.test.js).
+// ============================================================
+export const AUTH_MODAL_STATE = {
+  countdownTimer: null,    // setInterval handle for the mm:ss ticking
+  decidingRequestId: null, // v2: requestId with a decision POST in flight —
+                           // a re-render must NOT re-enable its buttons
+                           // (one decision per request)
+}
+
+// The 8 whitelist actions (server/lib/authorize.js AUTHORIZE_ACTIONS)
+// → i18n keys for readable names. Unknown actions fall back to the raw
+// action string (server may add whitelist entries before the UI does).
+const AUTH_ACTION_I18N_KEYS = {
+  'session.delete': 'auth_action_session_delete',
+  'sessions.cleanup-orphans': 'auth_action_sessions_cleanup_orphans',
+  'session.cleanup-all': 'auth_action_session_cleanup_all',
+  'session.export': 'auth_action_session_export',
+  'session.search': 'auth_action_session_search',
+  'token.reset': 'auth_action_token_reset',
+  'slash.clear': 'auth_action_slash_clear',
+  'startup.cleanup': 'auth_action_startup_cleanup',
+}
+export function authActionLabel(action) {
+  const key = AUTH_ACTION_I18N_KEYS[action]
+  if (key) {
+    const s = t(key)
+    if (s && s !== key) return s
+  }
+  return action || ''
+}
+
+// Known ctx fields → friendly labels (fields the server call sites
+// actually send: sessions.js / export.js / slash.js / cleanup.js).
+// Unknown fields render generically with the raw key. `cid` is skipped
+// in buildAuthCtxList — it is SSE routing, not user-facing context.
+const AUTH_CTX_I18N_KEYS = {
+  targetSessionId: 'auth_ctx_targetSessionId',
+  matchKind: 'auth_ctx_matchKind',
+  isMcodeSid: 'auth_ctx_isMcodeSid',
+  isOrphan: 'auth_ctx_isOrphan',
+  chatLen: 'auth_ctx_chatLen',
+  q: 'auth_ctx_q',
+  workspace: 'auth_ctx_workspace',
+  limit: 'auth_ctx_limit',
+  format: 'auth_ctx_format',
+  download: 'auth_ctx_download',
+  orphanCount: 'auth_ctx_orphanCount',
+  orphanIds: 'auth_ctx_orphanIds',
+  cmd: 'auth_ctx_cmd',
+  sessionId: 'auth_ctx_sessionId',
+  mcodeSessionId: 'auth_ctx_mcodeSessionId',
+  source: 'auth_ctx_source',
+}
+function authCtxLabel(key) {
+  const ik = AUTH_CTX_I18N_KEYS[key]
+  if (ik) {
+    const s = t(ik)
+    if (s && s !== ik) return s
+  }
+  return key
+}
+
+// mm:ss, clamped at 00:00. Pure so the mocked check can unit-test the
+// math without a ticking interval.
+export function formatAuthCountdown(msLeft) {
+  const s = Math.max(0, Math.ceil((Number(msLeft) || 0) / 1000))
+  const mm = String(Math.floor(s / 60)).padStart(2, '0')
+  const ss = String(s % 60).padStart(2, '0')
+  return `${mm}:${ss}`
+}
+
+function _stopAuthCountdown() {
+  if (AUTH_MODAL_STATE.countdownTimer) {
+    clearInterval(AUTH_MODAL_STATE.countdownTimer)
+    AUTH_MODAL_STATE.countdownTimer = null
+  }
+}
+
+function _startAuthCountdown(expiresAt) {
+  _stopAuthCountdown()
+  const el = document.getElementById('auth-modal-countdown')
+  if (!el) return
+  const tick = () => {
+    // VISUAL ONLY. Hitting 00:00 here must never decide anything — the
+    // server owns the timeout (fail-closed decline at expiresAt) and
+    // broadcasts authorization_decided when it fires. This tick does
+    // nothing but write textContent.
+    el.textContent = formatAuthCountdown((Number(expiresAt) || 0) - Date.now())
+  }
+  tick()
+  AUTH_MODAL_STATE.countdownTimer = setInterval(tick, 1000)
+}
+
+// Compact key/value list for the request's ctx. DOM construction only —
+// ctx values (session ids, paths, query strings) are untrusted wire
+// data; objects/arrays (orphanIds) are JSON-stringified.
+function buildAuthCtxList(ctx) {
+  const wrap = document.createElement('div')
+  wrap.className = 'auth-modal-ctx'
+  if (!ctx || typeof ctx !== 'object') return wrap
+  for (const key of Object.keys(ctx)) {
+    if (key === 'cid') continue // SSE routing field, not user-facing
+    let val = ctx[key]
+    if (val === null || val === undefined) continue
+    if (typeof val === 'object') {
+      try { val = JSON.stringify(val) } catch { val = String(val) }
+    }
+    const row = document.createElement('div')
+    row.className = 'auth-modal-ctx-row'
+    row.style.display = 'flex'
+    row.style.gap = '8px'
+    row.style.fontSize = '12px'
+    const k = document.createElement('span')
+    k.className = 'auth-modal-ctx-key'
+    k.style.minWidth = '90px'
+    k.style.opacity = '0.7'
+    k.textContent = authCtxLabel(key)
+    const v = document.createElement('span')
+    v.className = 'auth-modal-ctx-value'
+    v.style.wordBreak = 'break-all'
+    v.textContent = String(val)
+    row.appendChild(k)
+    row.appendChild(v)
+    wrap.appendChild(row)
+  }
+  return wrap
+}
+
+export function renderAuthModal() {
+  const modal = document.getElementById('auth-modal')
+  if (!modal) return
+  const pending = getPendingAuthRequests()
+  if (pending.length === 0) {
+    closeAuthModal()
+    return
+  }
+  // Show one request at a time, in arrival (queue) order.
+  const req = pending[0]
+  modal.style.display = 'flex'
+  const pos = document.getElementById('auth-modal-position')
+  if (pos) {
+    pos.textContent = pending.length > 1
+      ? t('auth_queue_pos').replace('{i}', 1).replace('{n}', pending.length)
+      : ''
+  }
+  const actionEl = document.getElementById('auth-modal-action')
+  if (actionEl) actionEl.textContent = authActionLabel(req.action)
+  const ctxEl = document.getElementById('auth-modal-ctx')
+  if (ctxEl) {
+    ctxEl.textContent = ''
+    ctxEl.appendChild(buildAuthCtxList(req.ctx))
+  }
+  // Reset the decision UI for the head request — EXCEPT when a decision
+  // POST is already in flight for it (events.js sets decidingRequestId):
+  // one decision per request, so a re-render must not re-enable those
+  // buttons. Advancing to a different head request re-enables normally;
+  // a decidingRequestId left over from the PREVIOUS (already-resolved)
+  // head is stale and cleared here so it cannot block the next decision.
+  if (AUTH_MODAL_STATE.decidingRequestId && AUTH_MODAL_STATE.decidingRequestId !== req.requestId) {
+    AUTH_MODAL_STATE.decidingRequestId = null
+  }
+  const deciding = AUTH_MODAL_STATE.decidingRequestId === req.requestId
+  const approveBtn = document.getElementById('auth-modal-approve')
+  const denyBtn = document.getElementById('auth-modal-deny')
+  const errEl = document.getElementById('auth-modal-error')
+  if (approveBtn) approveBtn.disabled = deciding
+  if (denyBtn) denyBtn.disabled = deciding
+  if (errEl && !deciding) {
+    errEl.hidden = true
+    errEl.textContent = ''
+  }
+  _startAuthCountdown(req.expiresAt)
+}
+
+export function closeAuthModal() {
+  _stopAuthCountdown()
+  AUTH_MODAL_STATE.decidingRequestId = null
+  const modal = document.getElementById('auth-modal')
+  if (modal) modal.style.display = 'none'
+}
+// v2 (2026-09-20 webui-manual-audit): authorize modal — end auth-modal
+
+// ============================================================
+// v2 (2026-09-20 webui-manual-audit D1): anomaly-channel (alerts)
+// surface — begin alerts-surface
+//
+// The bell half of lease B02 §AP3: server/lib/alerts.js pushes system
+// signals on the independent /api/alerts SSE channel; state.js owns the
+// connection + module-level store (survives full-state re-renders, same
+// rationale as the auth queue); THIS block renders it. The badge is
+// cheap and updated on EVERY call; the list is only rebuilt while the
+// popover is open (closed → skip — render() storms never rebuild it).
+//
+// SECURITY (CodeQL js/xss-through-dom): msg / src / sessionId / id are
+// untrusted SSE wire data (server relays raw error text from the mcode
+// subprocess). Everything dynamic is DOM construction + textContent,
+// never innerHTML — same style as buildAuthCtxList above.
+// ============================================================
+
+// Compact HH:MM for the item meta line. Pure (no Date.now) so the
+// mocked check can pin ts values. Non-finite / non-positive ts (field
+// missing on a malformed frame) renders '' rather than a fake epoch
+// time — _normalizeAlert coerces junk to 0, so 0 means "no timestamp".
+export function formatAlertTime(ts) {
+  const n = Number(ts)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  const d = new Date(n)
+  if (isNaN(d.getTime())) return ''
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return `${hh}:${mm}`
+}
+
+// Session hint — sessionId can be a long randomUUID; show the head
+// only (enough to tell WHICH tab/session the alert belongs to).
+export function shortSessionHint(sid) {
+  const s = String(sid || '')
+  return s.length > 12 ? `${s.slice(0, 12)}…` : s
+}
+
+const ALERT_LEVEL_I18N_KEYS = {
+  info: 'alerts_level_info',
+  warn: 'alerts_level_warn',
+  error: 'alerts_level_error',
+}
+export function alertLevelLabel(level) {
+  const key = ALERT_LEVEL_I18N_KEYS[level]
+  if (key) {
+    const s = t(key)
+    if (s && s !== key) return s
+  }
+  return level || 'info'
+}
+
+// One list row: [level glyph] [msg / meta(src · session · ×count · time)]
+function buildAlertItem(a) {
+  const item = document.createElement('div')
+  item.className = `alerts-item level-${a.level}`
+  item.title = alertLevelLabel(a.level)
+  const icon = document.createElement('span')
+  icon.className = 'alerts-item-level'
+  icon.textContent = a.level === 'error' ? '✕' : (a.level === 'warn' ? '!' : 'i')
+  icon.setAttribute('aria-hidden', 'true')
+  const main = document.createElement('div')
+  main.className = 'alerts-item-main'
+  const msg = document.createElement('div')
+  msg.className = 'alerts-item-msg'
+  msg.textContent = a.msg || ''
+  const meta = document.createElement('div')
+  meta.className = 'alerts-item-meta'
+  const parts = [a.src || 'system']
+  if (a.sessionId) parts.push(`${t('alerts_session')} ${shortSessionHint(a.sessionId)}`)
+  if (a.count > 1) parts.push(`×${a.count}`)
+  const timeStr = formatAlertTime(a.ts)
+  if (timeStr) parts.push(timeStr)
+  meta.textContent = parts.join(' · ')
+  main.appendChild(msg)
+  main.appendChild(meta)
+  item.appendChild(icon)
+  item.appendChild(main)
+  return item
+}
+
+export function renderAlerts() {
+  // Badge: unread count, 99+ cap, hidden at zero.
+  const badge = document.getElementById('alerts-badge')
+  if (badge) {
+    const n = getAlertsUnread()
+    badge.textContent = n > 99 ? '99+' : String(n)
+    badge.hidden = n <= 0
+  }
+  // List: only while the popover is open (the static markup holds the
+  // closed state; nothing to rebuild otherwise).
+  const popover = document.getElementById('alerts-popover')
+  if (!popover || popover.hidden) return
+  const body = document.getElementById('alerts-popover-body')
+  if (!body) return
+  body.textContent = ''
+  const alerts = getAlerts()
+  if (alerts.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'alerts-empty'
+    empty.textContent = t('alerts_empty')
+    body.appendChild(empty)
+    return
+  }
+  for (const a of alerts) body.appendChild(buildAlertItem(a))
+}
+// v2 (2026-09-20 webui-manual-audit D1): alerts surface — end alerts-surface
 
 // ============================================================
 // Ask User Tool (v0.5.bx-8: mcode 0.1.4 ask_user 工具 — 内嵌选项 + 跳过)
@@ -2312,4 +2725,3 @@ if (window.marked) {
 // ============================================================
 // Slash command overlay
 // ============================================================
-

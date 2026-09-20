@@ -54,11 +54,38 @@ const _acpMock = {
   shutdownMcodeAcpSingleton: () => {},
   dropMcodeSessionFromCache: () => {}, // v1.0: 删除路由防复活用
   getMcodeSessionsStaleSync: () => null, // v1.0: 过期缓存读取 (推送防闪跌用)
+  // B04 patch: interaction/commands.js#bodyHelp uses ensureMcodeCommands
+  //   to list /help contents. Default stub returns an empty payload so
+  //   tests that don't care about /help can ignore this; tests that DO
+  //   care (test/lib-interaction.test.js) override via their own
+  //   t.mock.module registration since setupMocks only allows one
+  //   registration per module path per test context.
+  ensureMcodeCommands: async () => ({
+    mcode: [], webui: [], fetchedAt: 0, source: "test-default",
+  }),
 };
 
 let _sessionsStore = [];
 let _saveImpl = (arr) => {
   _sessionsStore = [...arr];
+};
+
+// v2 (2026-09-20 webui-manual-audit): mutable mcode-acp runner mock.
+//   Same dispatch-through pattern as _acpMock above: mock.module()
+//   throws ERR_INVALID_STATE on a second registration for the same
+//   specifier, and chat.js binds its runMcodeAcp import at first
+//   dynamic import — so a per-test "failed send" (ENOENT-style
+//   {status:"failed", error}) can only be injected by mutating the
+//   impl the registered wrapper dispatches to. Default mirrors the
+//   previous fixed success mock byte-for-byte, so existing suites
+//   see no behavior change.
+const _mcodeAcpMock = {
+  runMcodeAcp: async () => ({
+    status: "succeeded",
+    answer: "mocked",
+    sessionId: null,
+  }),
+  streamAcpPrompt: async () => ({ status: "succeeded", answer: "mocked" }),
 };
 
 let _lanBroadcast = false;
@@ -91,6 +118,14 @@ export const acpMock = _acpMock;
 // (alternative to passing `overrides` to setupMocks at before() time)
 export function registerAcpMock(overrides) {
   Object.assign(_acpMock, overrides);
+}
+// v2 (2026-09-20 webui-manual-audit): imperative mutator for the
+//   mcode-acp runner mock — see the _mcodeAcpMock declaration for why
+//   dispatch-through (rather than a second mock.module) is the only
+//   way to flip runMcodeAcp to a failed result after chat.js has
+//   already been imported.
+export function registerMcodeAcpMock(overrides) {
+  Object.assign(_mcodeAcpMock, overrides);
 }
 export function registerSessionsStore({ initial = [], save } = {}) {
   _sessionsStore = [...initial];
@@ -144,6 +179,8 @@ export function setFileTokenPlanKey(v, p) {
  *   - acp: partial overrides for the acp-client.js mock (named exports)
  *   - sessions: { initial, save } for the lib/sessions.js mock
  *   - mavis: partial overrides for the lib/mavis-usage.js mock
+ *   - mcodeAcp: partial overrides for the lib/mcode-acp.js runner mock
+ *     (runMcodeAcp / streamAcpPrompt) — e.g. a failed-send result
  *   - lanBroadcast: boolean (default false)
  */
 export async function setupMocks(t, overrides = {}) {
@@ -189,6 +226,9 @@ export async function setupMocks(t, overrides = {}) {
         _acpMock.dropMcodeSessionFromCache(...a),
       getMcodeSessionsStaleSync: (...a) =>
         _acpMock.getMcodeSessionsStaleSync(...a),
+      // B04 patch: ensureMcodeCommands for interaction/commands.js
+      //   #bodyHelp dispatch (see BORROW-dsh-deepseek-harness-2026-08-28 §3).
+      ensureMcodeCommands: (...a) => _acpMock.ensureMcodeCommands(...a),
     },
   });
 
@@ -205,6 +245,12 @@ export async function setupMocks(t, overrides = {}) {
       // defaults so handlers that import them don't blow up. Tests that
       // care about these can register their own via setupMocks overrides
       // (we'd need to add similar wrappers — not done yet).
+      // v2 (2026-09-20 webui-manual-audit): mirror the REAL
+      // resetContext claim reset (lib/sessions.js) — it now also drops
+      // cs.running + context.thinkingStatus so a mid-run switch can't
+      // park a permanent 思考中/stop-button claim. Without this parity,
+      // mocked route tests would keep exercising the old "claim
+      // survives the switch" contract and green-light regressions.
       resetContext: (cs) => {
         if (cs && cs.context) {
           cs.context.tokens = 0;
@@ -212,6 +258,19 @@ export async function setupMocks(t, overrides = {}) {
           cs.context.percent = 0;
           cs.context.estimated = true;
           cs.context.usageSource = null;
+          cs.context.thinkingStatus = "Idle";
+        }
+        if (cs) {
+          cs.running = {
+            active: false,
+            prompt: null,
+            pid: null,
+            startedAt: null,
+            model: null,
+            sessionId: null,
+            lastDeltaAt: null,
+            tps: 0,
+          };
         }
       },
       persistCurrentChat: () => {},
@@ -359,14 +418,16 @@ export async function setupMocks(t, overrides = {}) {
   }
 
   // 7. webui/lib/mcode-{acp,exec,rpc}.js — heavy mcode spawners
+  //    mcode-acp dispatches through the mutable _mcodeAcpMock (see its
+  //    declaration block) so failed-send tests can inject
+  //    {status:"failed"} results via overrides.mcodeAcp or
+  //    registerMcodeAcpMock() without a second mock.module call
+  //    (ERR_INVALID_STATE on re-registration).
+  if (overrides.mcodeAcp) Object.assign(_mcodeAcpMock, overrides.mcodeAcp);
   t.mock.module(absPath("lib/mcode-acp.js"), {
     namedExports: {
-      runMcodeAcp: async () => ({
-        status: "succeeded",
-        answer: "mocked",
-        sessionId: null,
-      }),
-      streamAcpPrompt: async () => ({ status: "succeeded", answer: "mocked" }),
+      runMcodeAcp: (...a) => _mcodeAcpMock.runMcodeAcp(...a),
+      streamAcpPrompt: (...a) => _mcodeAcpMock.streamAcpPrompt(...a),
     },
   });
   t.mock.module(absPath("lib/mcode-exec.js"), {
@@ -419,3 +480,208 @@ export async function setupMocks(t, overrides = {}) {
   });
 }
 
+// -----------------------------------------------------------------------
+// Decision-injection helper (2026-09-20 rigor fix).
+//
+// authorize() no longer auto-approves under `node --test` (the
+// execArgv branch was removed — it meant no test ever exercised the
+// real decision path). Tests that call route handlers which await
+// authorize() must now drive the REAL path: this helper polls
+// getPendingRequestIds() and resolves each new pending request via
+// _decideForTests(id, approve) — exactly what a user's modal click
+// does through POST /api/auth/decision, minus the HTTP.
+//
+// Properties:
+//   - Touches ZERO production code (getPendingRequestIds /
+//     _decideForTests are authorize.js's existing test surface).
+//   - Does NOT depend on --experimental-test-module-mocks — plain
+//     dynamic import of the real (or, if a test registered one, the
+//     mocked) authorize module. Works in both suite modes.
+//   - Robust to handlers that only reach authorize() after an await
+//     (e.g. body parsing): a short interval polls while fn() runs.
+//
+// Usage:
+//   const res = await withDecisions(
+//     () => handleDeleteSession(fakeReq({}), res, ctx),
+//     { approve: true },
+//   );
+// -----------------------------------------------------------------------
+export async function withDecisions(fn, { approve = true } = {}) {
+  const mod = await import(absPath("lib/authorize.js"));
+  // Defensive: a test may have registered a t.mock.module replacement
+  // for authorize.js that doesn't expose the pending-registry helpers
+  // (e.g. the fixed-decline stub in routes-sessions-search.test.js).
+  // Such stubs resolve immediately — nothing to drive.
+  if (
+    typeof mod.getPendingRequestIds !== "function" ||
+    typeof mod._decideForTests !== "function"
+  ) {
+    return fn();
+  }
+  // Requests that were already pending when withDecisions started
+  // belong to someone else — only decide requests created by fn().
+  const preExisting = new Set(mod.getPendingRequestIds());
+  const decided = new Set();
+  // Windows event-loop liveness fix (fork preview run 35493902383):
+  //   The poll interval MUST stay REF'd. Mock unit tests drive route
+  //   handlers with zero real IO, so while fn() awaits authorize() this
+  //   interval is the only ref'd handle in the loop. The previous
+  //   unref() let the loop drain on windows-latest before the 2 ms poll
+  //   could call _decideForTests, and node:test reported "Promise
+  //   resolution is still pending but the event loop has already
+  //   resolved" + cancelledByParent for the whole routes-export.check
+  //   .mjs file (POSIX passed only because incidental IO happened to
+  //   hold the loop). Same fix shape as lib-authorize's REF'd watchdog
+  //   (run 35493384574) — liveness only, zero assertion change.
+  const poll = setInterval(() => {
+    for (const id of mod.getPendingRequestIds()) {
+      if (decided.has(id) || preExisting.has(id)) continue;
+      decided.add(id);
+      mod._decideForTests(id, approve);
+    }
+  }, 2);
+  // Safety self-clear: a REF'd interval that outlives a broken test
+  // would hang the whole run — if fn() never settles (pending auth
+  // requests never decided), release the interval and fail fast at 5 s.
+  let bailOut;
+  const bail = setTimeout(() => {
+    clearInterval(poll);
+    bailOut(new Error(
+      "withDecisions: fn() did not settle within 5000ms — pending auth requests were never decided (poll interval released, failing instead of hanging)",
+    ));
+  }, 5000);
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise((_, reject) => {
+        bailOut = reject;
+      }),
+    ]);
+  } finally {
+    clearTimeout(bail);
+    clearInterval(poll);
+  }
+}
+
+// -----------------------------------------------------------------------
+// decideNextAuthorization — HTTP-level decision driver for integration
+// tests that spawn the REAL server.js in a child process. Subscribes
+// to the SSE stream, waits for the next `needs_authorization` frame,
+// extracts the requestId, and POSTs /api/auth/decision — the exact
+// wire path the production modal uses.
+//
+// Resolves { requestId, decision } where decision is the parsed
+// /api/auth/decision response. Rejects if no auth request arrives
+// within `timeoutMs` (default 3s).
+//
+// IMPORTANT: start this helper BEFORE firing the gated HTTP request
+// and allow a short delay for the SSE subscription to register —
+// needs_authorization broadcasts are NOT replayed to late subscribers
+// (the pending-request SSE frame is fire-once).
+// -----------------------------------------------------------------------
+export function decideNextAuthorization({ port, approve = true, cid, timeoutMs = 3000 }) {
+  return new Promise((resolve, reject) => {
+    import("node:http").then((http) => {
+      // settled:  outer promise has resolved/rejected.
+      // deciding: a needs_authorization frame was seen and the decision
+      //   POST is in flight — from that point, teardown noise from our own
+      //   SSE destroy() must NOT reject the outer promise; the POST's
+      //   outcome is the answer.
+      let settled = false;
+      let deciding = false;
+      let sseReq = null;
+      let postReq = null;
+      // U4 (2026-09-20): settlement guarantee — the bail-out timer now covers
+      // BOTH phases (waiting for the SSE frame AND the decision POST). The
+      // old code cleared it as soon as the frame arrived, so a server that
+      // accepted the POST but never responded left this promise pending
+      // forever with no timeout. On fire, everything is destroyed and the
+      // promise rejects — waiting sides must never depend on the peer (or
+      // incidental event-loop handles) for liveness.
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try { if (sseReq) sseReq.destroy(); } catch {}
+        try { if (postReq) postReq.destroy(); } catch {}
+        reject(new Error(
+          `decideNextAuthorization: no completed needs_authorization decision within ${timeoutMs}ms`,
+        ));
+      }, timeoutMs);
+      const settle = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      sseReq = http.request(
+        {
+          method: "GET",
+          host: "127.0.0.1",
+          port,
+          path: "/api/events" + (cid ? `?cid=${encodeURIComponent(cid)}` : ""),
+        },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => {
+            if (deciding) return; // POST already dispatched; ignore trailing data
+            body += chunk;
+            // Frames arrive as `event: needs_authorization\ndata: {...}\n\n`.
+            // Scan the accumulated body each chunk — cheap at test scale.
+            const frames = body.split("\n\n");
+            for (const frame of frames) {
+              const evMatch = frame.match(/^event: needs_authorization$/m);
+              if (!evMatch) continue;
+              const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
+              if (!dataLine) continue;
+              let payload;
+              try { payload = JSON.parse(dataLine.slice("data: ".length)); } catch { continue; }
+              const requestId = payload && payload.requestId;
+              if (!requestId) continue;
+              deciding = true; // decision POST in flight — ignore SSE teardown noise
+              try { sseReq.destroy(); } catch {}
+              const data = JSON.stringify({ requestId, approve });
+              postReq = http.request(
+                {
+                  method: "POST",
+                  host: "127.0.0.1",
+                  port,
+                  path: "/api/auth/decision",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Content-Length": Buffer.byteLength(data),
+                  },
+                },
+                (postRes) => {
+                  const chunks = [];
+                  postRes.on("data", (c) => chunks.push(c));
+                  postRes.on("end", () => {
+                    let decision;
+                    try { decision = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch {}
+                    settle(resolve, { requestId, decision, status: postRes.statusCode });
+                  });
+                  postRes.on("error", (e) => {
+                    settle(resolve, { requestId, decision: null, status: postRes.statusCode, error: e.message });
+                  });
+                },
+              );
+              postReq.on("error", (e) => settle(reject, e));
+              postReq.write(data);
+              postReq.end();
+              return;
+            }
+          });
+          res.on("error", (e) => {
+            if (settled || deciding) return; // our own destroy()
+            settle(reject, e);
+          });
+        },
+      );
+      sseReq.on("error", (e) => {
+        if (settled || deciding) return; // our own destroy()
+        settle(reject, e);
+      });
+      sseReq.end();
+    }).catch(reject);
+  });
+}

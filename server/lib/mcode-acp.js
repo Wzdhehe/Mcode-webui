@@ -8,11 +8,8 @@ import {
   setActiveChild,
   clearActiveChild,
   pushStateFor,
+  pushAlert,
   getCidsByMcodeSession,
-  broadcastQueueUpdate,
-  broadcastGoalUpdate,
-  broadcastDelegationUpdate,
-  broadcastCurrentSessionUpdate,
 } from "./state-bus.js";
 import { applyMavisUsageToCs } from "./mavis-usage.js";
 import {
@@ -53,15 +50,6 @@ export async function runMcodeAcp(content, opts = {}) {
   }
   const client = new McodeAcpClient({ debug: false });
   let sid = existingSid;
-  // v1.1.1: 提前点亮 running 标志 — client.start() 需 5-8s（mcode acp 冷
-  // 启动），之前 running.active 要到 start 完成后才置位，这段盲区里并发
-  // send 会绕过自动排队、各自开新 mcode session。finalize 统一复位。
-  if (cs && cs.running) {
-    cs.running.active = true;
-    cs.running.sessionId = existingSid || null;
-    cs.running.startedAt = Date.now();
-    pushStateFor(cid);
-  }
   try {
     await client.start();
     if (sid) {
@@ -77,17 +65,20 @@ export async function runMcodeAcp(content, opts = {}) {
     if (!sid) {
       const r = await client.newSession(workspace);
       sid = r.sessionId;
-      // v1.1.1: session/new 一返回就把 mcodeSessionId 挂到 cs 并推送 —
-      // 之前只在 prompt finalize 时赋值 (下方 r.sessionId 处), 整个运行
-      // 期间并发 send 看到的 cs.mcodeSessionId 都是 null → 每条消息各自
-      // 开新 mcode session, 运行中自动排队也无从谈起
-      if (sid && cs) {
-        cs.mcodeSessionId = sid;
-        pushStateFor(cid);
-      }
     }
     return await streamAcpPrompt(client, sid, content, label, cs, cid);
   } catch (e) {
+    // v2.0 (lease B02): §AP5 — surface subprocess start / session
+    // failures on the anomaly channel instead of swallowing them
+    // into a chat `! [error]` line.
+    pushAlert({
+      level: "error",
+      msg: `[mcode-acp.start] ${e.message}`,
+      src: "mcode-acp",
+      cid: cid || null,
+      sessionId: sid || null,
+      data: { phase: "start-or-load" },
+    });
     return {
       status: "failed",
       error: { message: e.message },
@@ -117,17 +108,6 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
       tps: null,
     };
     const t0 = Date.now();
-    // v1.1.1: 流式节流推送 — thought/message chunk 更新 cs.chat 后必须推
-    // 状态, 否则客户端只能等 finalize 才看到正文（用户实测: 正文不流式）。
-    // 300ms 节流: 长回复 chunk 很密, 逐 chunk push 会打爆 SSE。
-    let lastStreamPush = 0;
-    const throttledStreamPush = (force = false) => {
-      const now = Date.now();
-      if (force || now - lastStreamPush >= 300) {
-        lastStreamPush = now;
-        pushStateFor(cid);
-      }
-    };
     cs.running = {
       active: true,
       prompt: label,
@@ -141,29 +121,27 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
     cs.context.thinkingStatus = "Running";
     setActiveChild(cid, client);
     pushStateFor(cid);
-    // v1.1.1: 90s 固定超时会误杀长生成 (用户 8000 字任务 ~90s 被掐, 报
-    // "prompt did not return in 90s" 而模型仍在正常出 chunk)。改活动感知:
-    // 每个 chunk 到达都重置计时器 (回调尾部 armSafetyTimeout), 只有连续
-    // IDLE_TIMEOUT_MS 无任何输出才判定挂死。MCODE_PROMPT_IDLE_TIMEOUT_MS 可覆盖。
-    const IDLE_TIMEOUT_MS =
-      Number(process.env.MCODE_PROMPT_IDLE_TIMEOUT_MS) || 90000;
-    let safetyTimeout = null;
-    const armSafetyTimeout = () => {
-      if (safetyTimeout) clearTimeout(safetyTimeout);
-      safetyTimeout = setTimeout(() => {
-        if (r.status === "unknown") {
-          r.status = "timeout";
-          r.error = {
-            message: `mcode acp prompt idle: no output for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s`,
-          };
-          try {
-            client.stop();
-          } catch {}
-          finalize();
-        }
-      }, IDLE_TIMEOUT_MS);
-    };
-    armSafetyTimeout();
+    const safetyTimeout = setTimeout(() => {
+      if (r.status === "unknown") {
+        r.status = "timeout";
+        r.error = { message: "mcode acp prompt did not return in 90s" };
+        // v2.0 (lease B02): §AP5 — surface silent hangs on the
+        // anomaly channel as a `warn` (less severe than a crash
+        // but still actionable).
+        pushAlert({
+          level: "warn",
+          msg: `[mcode-acp.timeout] prompt did not return in 90s`,
+          src: "mcode-acp",
+          cid: cid || null,
+          sessionId: sid || null,
+          data: { phase: "stream" },
+        });
+        try {
+          client.stop();
+        } catch {}
+        finalize();
+      }
+    }, 90000);
     function finalize() {
       if (r._finalized) return;
       r._finalized = true;
@@ -190,27 +168,6 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
             ? line.slice(0, -2)
             : line,
         );
-      }
-      // v1.1.1: turn 结束 = mcode 自动投递排队中的消息 → 对账清零。
-      // (0.4.2 无 queue_update 推送, queue/list 在投递后返回 []; 不清的话
-      //  cs.mcodeQueue 残留, 客户端队列徽标永远亮着)
-      if (Array.isArray(cs.mcodeQueue) && cs.mcodeQueue.length && cs.mcodeSessionId) {
-        const qSid = cs.mcodeSessionId;
-        const qWorkspace = (cs.workspace && cs.workspace.dir) || undefined;
-        (async () => {
-          try {
-            const qc = new McodeAcpClient({ debug: false });
-            try {
-              await qc.start();
-              await Promise.resolve(qc.loadSession?.(qSid, qWorkspace)).catch(() => {});
-              const ql = await qc.queueList(qSid);
-              cs.mcodeQueue = (ql && ql.items) || [];
-              pushStateFor(cid);
-            } finally {
-              qc.stop();
-            }
-          } catch {}
-        })();
       }
       if (r.usage) {
         cs.context.tokens =
@@ -357,6 +314,19 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
         if (c.kind === "error" || c.error) {
           r.error = { message: c.text || c.error || JSON.stringify(c) };
           r.status = "failed";
+          // v2.0 (lease B02): §AP5 — push the protocol-level error to
+          // the anomaly channel. The chat.js handler will also
+          // surface it (since r.status === "failed"), but firing
+          // here gives operators an immediate, low-latency signal
+          // even before the response object resolves.
+          pushAlert({
+            level: "error",
+            msg: `[mcode-acp.protocol] ${r.error.message}`,
+            src: "mcode-acp",
+            cid: cid || null,
+            sessionId: sid || null,
+            data: { kind: c.kind, raw: c.data || null },
+          });
           finalize();
           return;
         }
@@ -382,12 +352,10 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
           r.thinking = (r.thinking || "") + c.text;
           const oneLine = r.thinking.replace(/\n+/g, " ").trim();
           streamUpdateLine(cs.chat, "▲", oneLine);
-          throttledStreamPush();
         } else if (c.kind === "message" && typeof c.text === "string") {
           r.answer = (r.answer || "") + c.text;
           const oneLine = r.answer.replace(/\n+/g, " ").trim();
           streamUpdateLine(cs.chat, "●", oneLine);
-          throttledStreamPush();
         } else if (c.kind === "tool_call" && c.update) {
           // v0.5.bs: 工具调用开始 — 写 `→ toolName` 行到 chat
           const u = c.update;
@@ -491,32 +459,18 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
           }
           console.log(`[mode.update] cid=${cid} mode=${mode}`);
         } else if (c.kind === "goal_update" && c.update) {
-          // v1.0.2: mcode 0.2.4 发 goal_update, 新 shape 是 { used, total, status } (5 状态)
-          // 旧 mcode 0.1.5 可能发 { active, text, duration } shape — 两套都支持
+          // mcode 0.1.5 acp 协议里 goal_update 实际上不一定发 (cli.js 搜不到此事件 type 字面量)
+          // 但保留 handler — 如果未来 mcode 0.1.6+ 加了, 直接用
           const u = c.update;
-          // 新 shape: 走 broadcast (per-mcode-session 跨 cid 同步)
-          if (typeof u.used === "number" || typeof u.total === "number" || u.status) {
-            const goal = {
-              used: typeof u.used === "number" ? u.used : 0,
-              total: typeof u.total === "number" ? u.total : 0,
-              status: u.status || "active",
-            };
-            broadcastGoalUpdate(cid, goal);
-            console.log(
-              `[goal.update] cid=${cid} status=${goal.status} used=${goal.used}/${goal.total}`,
-            );
-          } else {
-            // 旧 shape: 直接 mutate cs.goal (legacy per-cid 字段)
-            cs.goal = {
-              active: !!u.active,
-              text: u.text || u.description || null,
-              status: u.status || null,
-              duration: u.duration || null,
-            };
-            console.log(
-              `[goal.update.legacy] cid=${cid} active=${cs.goal.active} status=${cs.goal.status}`,
-            );
-          }
+          cs.goal = {
+            active: !!u.active,
+            text: u.text || u.description || null,
+            status: u.status || null,
+            duration: u.duration || null,
+          };
+          console.log(
+            `[goal.update] cid=${cid} active=${cs.goal.active} status=${cs.goal.status}`,
+          );
         } else if (c.kind === "config_option_update" && c.update) {
           // v0.5.by: mcode acp 0.1.5 推的 config 变化事件
           // 典型场景: 别的客户端改了 permissionMode / model, webui 同步本地 cs
@@ -549,37 +503,6 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
           console.log(
             `[session.info] cid=${cid} keys=${JSON.stringify(Object.keys(u || {})).slice(0, 200)}`,
           );
-        } else if (c.kind === "queue_update" && c.update) {
-          // v1.0.2: mcode 0.2.4 队列状态变化
-          // 典型 payload: { sessionId, items: [{ itemId, text, createdAt }] }
-          // 走 broadcastQueueUpdate → per-mcode-session 跨 cid 同步 (手机 + 电脑开同一 session)
-          const u = c.update;
-          const items = Array.isArray(u.items) ? u.items : [];
-          broadcastQueueUpdate(cid, items);
-          console.log(
-            `[queue.update] cid=${cid} items=${items.length} mvsId=${cs.mcodeSessionId}`,
-          );
-        } else if (c.kind === "delegation_update" && c.update) {
-          // v1.0.2: mcode 0.2.4 delegation 状态变化
-          // 典型 payload: { sessionId, delegations: [{ delegationId, agent, status, ... }] }
-          const u = c.update;
-          const dels = Array.isArray(u.delegations) ? u.delegations : [];
-          broadcastDelegationUpdate(cid, dels);
-          console.log(
-            `[delegation.update] cid=${cid} delegations=${dels.length}`,
-          );
-        } else if (c.kind === "current_session_update" && c.update) {
-          // v1.0.2: mcode 0.2.4 当前 session 切换 (resume / switch 触发)
-          // 典型 payload: { sessionId, title }
-          const u = c.update;
-          // 用 broadcast 走完整 cid 桥接 (会更新 cs.mcodeSessionId + 推给所有同 session 的 cid)
-          broadcastCurrentSessionUpdate(cid, {
-            mcodeSessionId: u && u.sessionId ? u.sessionId : null,
-            title: u && u.title ? u.title : null,
-          });
-          console.log(
-            `[current.session.update] cid=${cid} → mvsId=${u && u.sessionId}`,
-          );
         } else if (c.kind === "other" && c.update) {
           const u = c.update;
           if (u && u.sessionUpdate) {
@@ -595,11 +518,7 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
         }
         cs.running.lastDeltaAt = now;
         cs.context.tps = cs.running.tps;
-        // v1.1.1: chunk 到达 = turn 活着, 重置空闲超时; 状态推送走 300ms 节流
-        // (这里原来是逐 chunk 全量快照推送, 长回复会打爆 SSE, 也让上面的
-        // throttledStreamPush 形同虚设)
-        armSafetyTimeout();
-        throttledStreamPush();
+        pushStateFor(cid);
       })
       .then((result) => {
         r.answer = result.answer || r.answer;
@@ -613,6 +532,16 @@ function streamAcpPrompt(client, sid, content, label, cs, cid) {
       .catch((e) => {
         r.status = "failed";
         r.error = { message: e.message };
+        // v2.0 (lease B02): §AP5 — final-catch failure (anything
+        // not already caught by the inner error handler).
+        pushAlert({
+          level: "error",
+          msg: `[mcode-acp.stream] ${e.message}`,
+          src: "mcode-acp",
+          cid: cid || null,
+          sessionId: sid || null,
+          data: { phase: "promise-catch" },
+        });
         finalize();
       });
   });

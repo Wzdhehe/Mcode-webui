@@ -1,43 +1,14 @@
-# runtime / cache
-*.log
-.server.log*
-.server.err*
-.DS_Store
-.server.log
+
+# v2026-08-28 modacker: webui runtime artifacts (server.err + sessions json)
 .server.err
-# v1.0.2 Round 6: 临时启动 server 时的 log (从 Start-Process 跑预览)
-server-test.out
-server-test.err
+.webui-sessions.json
 
-# local probe artifacts (kept out of repo — they belong in /acp-probe/ or ad-hoc)
-probes/.cache/
-probes/*.log
-acp-probe.cjs
-/acp-probe-*
-acp-probe-stderr.err
-acp-probe-stdout.out
-goal-plan-probe.cjs
-probe-acp.mjs
-probe-result.log
-.env-debug
-alive-test.txt
-check-dict.mjs
-i18n-shim.mjs
-test-install-regex.mjs
-validate-dict.mjs
-start-with-debug.cjs
-probes/
-
-# node
-node_modules/
-package-lock.json
-
-# coverage
+# v2026-09-20 webui-rigor-fix H1: test/coverage artifacts
+# c8 writes per-subprocess tmp JSON under coverage/tmp/ and coverage_tmp/;
+# keep all of it, lcov output, logs, and scratch dirs out of the tree.
 coverage/
-lcov.info
-
-# agent scratch files (one-off batch setup scripts; safe to delete)
-scripts/tmp-*.mjs
-
-# packaged plugin dist
-dist/
+coverage_tmp/
+*.lcov
+*.log
+.tmp/
+.DS_Store
