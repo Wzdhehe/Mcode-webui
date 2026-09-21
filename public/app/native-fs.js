@@ -11,10 +11,10 @@ import { directoryOpen } from '/libs/browser-fs-access/index.modern.js'
 
 /**
  * 检测当前是否在 Electron 桌面环境中运行
- * 直接检查 window.dialog 是否存在（preload 暴露的 API）
+ * 当前只用浏览器版本的 browser-fs-access
  */
 function isElectron() {
-  return typeof window !== 'undefined' && typeof window.dialog?.showOpenDirectory === 'function'
+  return false
 }
 
 /**
