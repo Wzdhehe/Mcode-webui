@@ -8,6 +8,8 @@
 <!-- v0.5.bn: highlight.js 资源包已移到 public/lib/.hl.bak/（v0.5.bn 删 4 个 broken CommonJS script），css link 同步删 -->
 <link rel="stylesheet" href="/styles/main.css?v=3">
 <link rel="stylesheet" href="/styles/premium.css?v=1">
+<!-- v4.0 (feat-workspace-lhl): 原生风格目录选择器对话框 -->
+<link rel="stylesheet" href="/app/fs-picker.css?v=1">
 </head>
 <body>
 <div class="app" id="app">
@@ -699,6 +701,8 @@
 <!-- v7: v0.5.bx-28 ask modal X/Esc/背景 改"彻底放弃" (清除 pendingAskUser, 不发 Q/A 给 mcode) -->
 <!-- v8: v0.5.bx-29 fix context usage: SSE 连接时主动 hydrate mavis db 真值 + finalize 时 broadcast 到同 mcodeSessionId 的所有 cid -->
 <!-- v9: v0.5.bx-31 删 send() 里基于 pendingAskUser 的 Q/A 模板化兜底 + render 时设 pendingAskUser; chat 发消息永远不被套 -->
+<!-- v10: v4.0 feat-workspace-lhl — fs-picker.js 在 main.js 之前加载，确保 window.FsPicker 可用 -->
+<script src="/app/fs-picker.js?v=1"></script>
 <script type="module" src="/app/main.js?v=17"></script>
 
 <!-- v1.0: 全局 toast 容器 — #toast 元素此前缺失, showToast() 一直静默空转 (LAN 开关/复制/用量刷新全无提示) -->

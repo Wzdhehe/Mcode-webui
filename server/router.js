@@ -45,6 +45,8 @@ import * as settingsRoute from "./routes/settings.js";
 import * as uploadRoute from "./routes/upload.js";
 import * as modelRoute from "./routes/model.js";
 import * as debugRoute from "./routes/debug.js";
+// v4.0 (feat-workspace-lhl): 原生风格目录选择器 — /api/fs/read 和 /api/fs/mkdir
+import * as fsRoute from "./routes/fs.js";
 // v0.5.by: mcode acp 协议 RPC 路由 (set_mode / set_config_option / cancel / load / activate)
 import * as protocolRoute from "./routes/protocol.js";
 
@@ -255,6 +257,18 @@ const ROUTES = [
     method: "POST",
     match: (p) => p === "/api/workspace/pick",
     handler: workspaceRoute.handleWorkspacePick,
+  },
+
+  // v4.0 (feat-workspace-lhl): 文件系统 API（原生风格目录选择器）
+  {
+    method: "GET",
+    match: (p) => p === "/api/fs/read",
+    handler: fsRoute.handleFsRead,
+  },
+  {
+    method: "POST",
+    match: (p) => p === "/api/fs/mkdir",
+    handler: fsRoute.handleFsMkdir,
   },
 
   // Settings

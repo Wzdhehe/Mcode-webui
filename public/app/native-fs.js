@@ -1,8 +1,8 @@
-// webui/public/app/native-fs.js — v3.0 (feat-workspace-lhl)
+// webui/public/app/native-fs.js — v4.0 (feat-workspace-lhl)
 //
 // 分层目录选择器，按优先级自动选择最优方案：
 //
-//  优先级 1: window.electron.dialog  (Electron 环境)
+//  优先级 1: window.dialog.showOpenDirectory  (Electron 环境)
 //    ✅ 直接调 OS 原生目录选择器（等同于 dialog.showOpenDialog）
 //    ✅ 无"上传"按钮，纯目录选择 UI
 //    ✅ Windows / macOS / Linux 全平台支持
@@ -15,7 +15,12 @@
 //    ⚠️ 仅限 Chromium 内核（Chrome/Edge/Arc/Brave 等）
 //    ⚠️ 首次调用弹出"允许此网站访问文件系统"提示（仅一次）
 //
-//  优先级 3: webkitdirectory input  (Firefox / Safari / 其他)
+//  优先级 3: fs-picker 对话框  (所有浏览器通用)
+//    ✅ 自绘原生风格对话框（地址栏 + 分列列表 + 创建文件夹）
+//    ✅ 通过后端 /api/fs/read 获取目录内容
+//    ⚠️ 非 OS 原生 UI，但功能完整
+//
+//  优先级 4: webkitdirectory input  (备用兜底)
 //    ⚠️ UI 是文件上传风格（有"上传"按钮），但功能正常
 //    ✅ 所有现代浏览器支持
 //    ⚠️ 无法直接拿到绝对路径 → 通过后端 resolve 搜索
@@ -46,7 +51,12 @@ export async function pickDirectory() {
     if (result.reason === 'cancel') return { ok: false, reason: 'cancel' }
   }
 
-  // 优先级 3: webkitdirectory (Firefox/Safari/其他)
+  // 优先级 3: fs-picker 对话框（所有浏览器通用）
+  const fsp = await _pickViaFsPicker()
+  if (fsp.ok) return fsp
+  if (fsp.reason === 'cancel') return { ok: false, reason: 'cancel' }
+
+  // 优先级 4: webkitdirectory (Firefox/Safari/其他)
   const webkit = await _pickViaWebkitdirectory()
   if (webkit.ok) return webkit
   if (webkit.reason === 'cancel') return { ok: false, reason: 'cancel' }
@@ -105,7 +115,31 @@ async function _pickViaFSA() {
 }
 
 // ===========================
-// 方案 3: webkitdirectory input
+// 方案 3: fs-picker 对话框（所有浏览器通用）
+// ===========================
+async function _pickViaFsPicker() {
+  try {
+    // 确保 FsPicker 类已加载
+    if (typeof window.FsPicker !== 'function') {
+      return { ok: false, reason: 'error', error: 'FsPicker 类未加载' }
+    }
+    const picker = new window.FsPicker({
+      title: '选择工作目录',
+      startPath: '',
+    })
+    const result = await picker.pick()
+    if (result.canceled) return { ok: false, reason: 'cancel' }
+    if (result.path) return { ok: true, dir: result.path }
+    return { ok: false, reason: 'error', error: '未选择任何目录' }
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e)
+    if (msg === 'cancel') return { ok: false, reason: 'cancel' }
+    return { ok: false, reason: 'error', error: msg }
+  }
+}
+
+// ===========================
+// 方案 4: webkitdirectory input
 // ===========================
 async function _pickViaWebkitdirectory() {
   return new Promise((resolve) => {
