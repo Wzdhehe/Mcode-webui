@@ -7,6 +7,10 @@ import { DEFAULT_MODEL } from "../lib/config.js";
 // v0.5.by: mcodePermissionToWebui / PERMISSION_MODES 仅用于 GET /api/permissions-modes 列合法值
 //   (mid-session 修改不可用, 但 list 给前端 dropdown 还是有用的)
 import { mcodePermissionToWebui, PERMISSION_MODES } from "../lib/mcode-rpc.js";
+// B04: webuiModeToLabel extracted to the permission-presets seam (per
+// BORROW-dsh-deepseek-harness-2026-08-28 § 3). Same string-mapping
+// behavior as the inline ternary chain that lived here before.
+import { webuiModeToLabel } from "../lib/interaction/permission-presets.js";
 
 async function readJson(req) {
   let body = "";
@@ -78,16 +82,9 @@ export async function handleSetPermissions(req, res, ctx) {
   const cid = ctx.cid;
   const payload = await readJson(req);
   const webuiMode = (payload.mode || "full").toLowerCase();
-  const label =
-    webuiMode === "ask"
-      ? "Ask"
-      : webuiMode === "auto"
-        ? "Auto"
-        : webuiMode === "read"
-          ? "Read"
-          : webuiMode === "off"
-            ? "Off"
-            : "Full access";
+  // B04: webuiModeToLabel lives in interaction/permission-presets.js
+  // (extracted from this inline ternary chain — same byte-identical output).
+  const label = webuiModeToLabel(webuiMode);
   cs.permissions = label;
   pushStateFor(cid);
   res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });

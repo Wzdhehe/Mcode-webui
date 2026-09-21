@@ -1,13 +1,21 @@
 // webui/server/lib/db.js
 // SQLite helpers — lazy require mcode's better-sqlite3 (so we don't break if missing).
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { MCODE_CMD } from "./config.js";
+// B01: append-only audit for mcode-side session deletes. The audit
+// fires AFTER the SQL transaction succeeds (so a rolled-back delete
+// has no event). dryRun previews are also audited (with dryRun:true)
+// so an operator can answer "who ran this preview yesterday?" from
+// the event stream alone. Static import (top of file) is fine here:
+// events.js has no dep on db.js, so no cycle exists. The lazy
+// resolver pattern below is defensive against future refactors.
+import { append as _eventsAppend } from "./events.js";
 
 const _webuiRequire = createRequire(import.meta.url);
 
@@ -19,20 +27,93 @@ const _webuiRequire = createRequire(import.meta.url);
 //   install layouts (registry install, npm-global mcode, etc.). The hard-coded
 //   `__dirname/../../../node_modules/...` path only works in the dev layout
 //   where webui lives at `<mcode-root>/webui/`.
+// C01 (round 7): resolver hardening — 4-tier probe with explicit failure log.
+//   (1) Adds `~/.mcode-webui/db-resolver.json` user-pinned candidate list
+//       between MCODE_CMD-derived and built-in tiers, so power users can
+//       point at a known-good path without per-session env vars.
+//   (2) Adds `_probeCandidate(path) → {path, exists, error}` that NEVER
+//       throws, so all-failed case can list every attempt's outcome
+//       (missing path vs NODE_MODULE_VERSION mismatch vs other require
+//       error). Operator sees the difference in the warning log without
+//       having to re-run with strace.
 let _McodeBetterSqlite3 = null;
 let _McodeBetterSqlite3Failed = false;
+// C01: remember the per-candidate failure log so we can emit a single
+// consolidated warning listing every attempt instead of one terse line.
+let _McodeBetterSqlite3Failures = null;
 
-// Resolution priority for better-sqlite3:
-//   1. $MCODE_BETTER_SQLITE3 (explicit env override — user-controllable)
-//   2. <MCODE_CMD>/../../node_modules/@minimax-ai/code/node_modules/better-sqlite3
-//      (mcode binary → its bundled deps — works in any install layout)
-//   3. <__dirname>/../../../node_modules/@minimax-ai/code/node_modules/better-sqlite3
-//      (dev layout fallback — webui source tree under canonical .minimax-code/webui/)
+// Probe a single better-sqlite3 candidate. NEVER throws.
+// Returns {path, exists, error}:
+//   path   — resolved filesystem path attempted
+//   exists — existsSync(path) result (true/false)
+//   error  — null on success; otherwise:
+//            * "path not found" — path doesn't exist
+//            * require() error message — path exists but the module can't
+//              be loaded (e.g. NODE_MODULE_VERSION mismatch, missing
+//              native binding, ABI drift).
+// Side-effect on success: caches the require result so the caller's
+// follow-up `_webuiRequire(path)` is a cached no-op.
+function _probeCandidate(path) {
+    let exists = false;
+    try {
+        exists = existsSync(path);
+    } catch {
+        exists = false;
+    }
+    if (!exists) return { path, exists: false, error: "path not found" };
+    try {
+        _webuiRequire(path);
+        return { path, exists: true, error: null };
+    } catch (e) {
+        return {
+            path,
+            exists: true,
+            error: e && e.message ? e.message : String(e),
+        };
+    }
+}
+
+// C01: read `~/.mcode-webui/db-resolver.json` for user-pinned candidate
+// paths. Schema (all fields optional):
+//   { "better_sqlite3_candidates": [ "/abs/path/to/better-sqlite3", ... ] }
+// Returns string[] of pinned paths. Silently returns [] on:
+//   - missing file (default case — user hasn't pinned anything)
+//   - bad JSON / non-array field
+//   - non-string entries (filtered out)
+// Tests inject a temp file via `MCODE_WEBUI_RESOLVER_JSON` env override
+// so we don't pollute the real `~/.mcode-webui/` during unit tests.
+export function _loadUserResolverConfig({ home = homedir() } = {}) {
+    const envOverride = process.env.MCODE_WEBUI_RESOLVER_JSON;
+    const candidatesPath =
+        envOverride || join(home, ".mcode-webui", "db-resolver.json");
+    if (!existsSync(candidatesPath)) return [];
+    try {
+        const raw = readFileSync(candidatesPath, "utf8");
+        const cfg = JSON.parse(raw);
+        if (!cfg || !Array.isArray(cfg.better_sqlite3_candidates)) return [];
+        return cfg.better_sqlite3_candidates.filter(
+            (p) => typeof p === "string" && p.length > 0,
+        );
+    } catch {
+        // malformed JSON or unreadable — fail open (no candidates)
+        return [];
+    }
+}
+
+// Resolution priority for better-sqlite3 (4 tiers, reliability descending):
+//   1. $MCODE_BETTER_SQLITE3 (explicit env override — highest)
+//   2. <MCODE_CMD>/...node_modules/... (mcode binary → bundled deps,
+//      emits BOTH npm-style `<dir>/../lib/...` AND flat `<dir>/...`
+//      to cover both registry and npm-global layouts)
+//   3. ~/.mcode-webui/db-resolver.json (user persistent config — power
+//      user pinning, no per-session env needed)
+//   4. Built-in fallback (lowest): <home>/.minimax-code/lib/... standard
+//      install + <__dirname>/../../../node_modules/... dev layout
 //
 // Exported (underscore prefix = test-only) so install-layout tests can
 // assert the candidate list without actually loading better-sqlite3.
 // `mcodeCmd` and `home` are parameterized so tests can simulate any
-// install layout without having to mutate module-level constants.
+// install layout without mutating module-level constants.
 export function _getBetterSqlite3Candidates({ mcodeCmd = MCODE_CMD, home = homedir() } = {}) {
   const candidates = [];
   if (process.env.MCODE_BETTER_SQLITE3) {
@@ -71,7 +152,11 @@ export function _getBetterSqlite3Candidates({ mcodeCmd = MCODE_CMD, home = homed
       ),
     );
   }
-  // Standard install location: <home>/.minimax-code/lib/node_modules/...
+  // Tier 3: user persistent resolver config (~/.mcode-webui/db-resolver.json).
+  //   Emitted even when MCODE_CMD is the "mcode" PATH-placeholder, because
+  //   the user's pinned path is independent of the mcode binary location.
+  candidates.push(..._loadUserResolverConfig({ home }));
+  // Tier 4a: standard install location: <home>/.minimax-code/lib/node_modules/...
   // Emitted unconditionally so we work even when MCODE_CMD is the
   // PATH-placeholder "mcode" (config.js can't find a mcode.cmd on
   // macOS where the binary is just "mcode").
@@ -97,16 +182,37 @@ export function _getBetterSqlite3Candidates({ mcodeCmd = MCODE_CMD, home = homed
 export function getMcodeBetterSqlite3({ MCODE_RUNTIME_DB: _ignored } = {}) {
   if (_McodeBetterSqlite3) return _McodeBetterSqlite3;
   if (_McodeBetterSqlite3Failed) return null;
-  for (const c of _getBetterSqlite3Candidates()) {
-    try {
+  // C01: probe every candidate with `_probeCandidate` (no-throw tuple),
+  // then on success re-require (cached no-op) to grab the module export.
+  // On all-fail, emit one console.warn per attempt + one summary so the
+  // operator can tell "missing path" from "NODE_MODULE_VERSION mismatch"
+  // without re-running with strace.
+  const candidates = _getBetterSqlite3Candidates();
+  const failures = [];
+  for (const c of candidates) {
+    const result = _probeCandidate(c);
+    if (result.error === null && result.exists) {
       _McodeBetterSqlite3 = _webuiRequire(c);
       return _McodeBetterSqlite3;
-    } catch {
-      // try next candidate
     }
+    failures.push(result);
   }
-  console.warn("[webui] cannot load better-sqlite3 from any known location");
+  _McodeBetterSqlite3Failures = failures;
   _McodeBetterSqlite3Failed = true;
+  // Per-attempt log: one line per failed candidate.
+  for (const f of failures) {
+    console.warn(
+      `[webui] better-sqlite3 candidate: ${f.path} → ${f.error}`,
+    );
+  }
+  // Summary line with remediation hints (3 ways to fix).
+  console.warn(
+    `[webui] cannot load better-sqlite3 from any of ${failures.length} candidate(s). ` +
+      `Fix by (a) setting $MCODE_BETTER_SQLITE3 to an absolute path, ` +
+      `(b) writing ~/.mcode-webui/db-resolver.json with ` +
+      `{"better_sqlite3_candidates":["/abs/path/..."]}, or ` +
+      `(c) running \`npm rebuild better-sqlite3\` to repair the native binding.`,
+  );
   return null;
 }
 
@@ -192,6 +298,25 @@ export function deleteMcodeSessionFromDb(
       }
       db.close();
       const totalRows = log.reduce((s, e) => s + Number(e.split(":")[1]), 0);
+      // B01: dry-run previews are state-touching actions. Record
+      // what would have been deleted. dryRun:true marker lets the
+      // audit distinguish "actually deleted" from "previewed".
+      // Fail-closed (2026-09-20): a failed preview audit surfaces as
+      // {ok:false} instead of being swallowed.
+      try {
+        _eventsAppend("session.delete", {
+          target: sid,
+          actor: "user",
+          payload: {
+            matchKind: "dryRun_db",
+            dryRun: true,
+            previewedRows: totalRows,
+            tables: log.length,
+          },
+        });
+      } catch (e) {
+        return { ok: false, reason: "audit_write_failed", error: e.message };
+      }
       return { ok: true, dryRun: true, log, totalRows };
     } catch (e) {
       if (db) try { db.close(); } catch {}
@@ -201,6 +326,21 @@ export function deleteMcodeSessionFromDb(
 
   let db;
   try {
+    // Write-ahead audit (2026-09-20 rigor fix): the intent line must
+    // land BEFORE the transaction opens. Failure → {ok:false} and the
+    // caller aborts; the db is untouched.
+    try {
+      _eventsAppend("session.delete.intent", {
+        target: sid,
+        actor: "user",
+        payload: {
+          matchKind: "db",
+          dryRun: false,
+        },
+      });
+    } catch (e) {
+      return { ok: false, reason: "audit_write_failed", error: e.message };
+    }
     db = new Db(MCODE_RUNTIME_DB, { readonly: false });
     db.pragma("busy_timeout = 5000"); // mcode 端可能在写, 最多等 5s
     const log = [];
@@ -218,6 +358,31 @@ export function deleteMcodeSessionFromDb(
     });
     tx(sid);
     db.close();
+    // B01: real mcode-side delete. We log AFTER tx() succeeds (no
+    // event on rollback). log.length is the number of tables that
+    // actually had rows for this sid — useful for "did this delete
+    // touch anything?" debugging. We do NOT log the rows themselves
+    // (privacy + volume).
+    // Fail-closed: if the OUTCOME write fails we still report
+    // {ok:false, reason:"audit_write_failed"} — the rows are gone but
+    // the operator must see the audit gap, never a clean ok:true.
+    try {
+      _eventsAppend("session.delete", {
+        target: sid,
+        actor: "user",
+        payload: {
+          matchKind: "db",
+          dryRun: false,
+          tablesAffected: log.length,
+          totalRowsDeleted: log.reduce(
+            (s, e) => s + Number((e.split(":")[1] || "0")),
+            0,
+          ),
+        },
+      });
+    } catch (e) {
+      return { ok: false, reason: "audit_write_failed", error: e.message };
+    }
     return { ok: true, log };
   } catch (e) {
     if (db)

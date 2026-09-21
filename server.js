@@ -17,15 +17,15 @@
 
 import http from 'node:http'
 import { existsSync, mkdirSync } from 'node:fs'
-import { execFileSync } from 'node:child_process'
 
-import { installGlobalErrorHandlers, MCODE_CMD, UPLOAD_DIR, PORT, HOST, DEFAULT_MODEL, DEFAULT_WORKSPACE, SESSIONS_DB } from './server/lib/config.js'
+import { installGlobalErrorHandlers, MCODE_CMD, UPLOAD_DIR, PORT, HOST, DEFAULT_MODEL, DEFAULT_WORKSPACE, SESSIONS_DB, TOKEN_STDOUT } from './server/lib/config.js'
 import { LAN_IP } from './server/lib/lan.js'
 import { handleRequest } from './server/router.js'
 import { runStartupCleanup } from './server/cleanup.js'
 import { shutdownMcodeAcpSingleton } from './server/lib/acp-client.js'
 import { init as initSettings, getPersistPath, getTokenEnabled } from './server/lib/settings.js'
 import { setTokenAuthEnabled as setAuthTokenEnabled } from './server/lib/auth.js'
+import { pushTokenFirstRun } from './server/lib/state-bus.js'
 
 installGlobalErrorHandlers()
 
@@ -37,61 +37,6 @@ if (!existsSync(MCODE_CMD) && MCODE_CMD !== 'mcode') {
 }
 mkdirSync(UPLOAD_DIR, { recursive: true })
 
-// v1.0.2: 硬性 mcode 版本检查 (用户决策: 不考虑旧 mcode 兼容, 只适配 0.2.4+)
-//   fail-fast: 旧 mcode 直接退出 + 清晰双语错误, 不做 graceful degrade
-//   原因: 半残状态 (部分能用部分不能用) 体验更差, 简单直接更可控
-function checkMcodeVersion() {
-  try {
-    const out = execFileSync(MCODE_CMD, ['--version'], {
-      encoding: 'utf8',
-      timeout: 5000,
-      shell: process.platform === 'win32', // Windows .cmd shim
-    }).trim();
-    // 解析 "0.2.4" 或 "v0.2.4" 或 "Minimax Code 0.2.4 (commit ...)"
-    const m = out.match(/(\d+)\.(\d+)\.(\d+)/);
-    if (!m) {
-      throw new Error(`cannot parse mcode version from: ${out.slice(0, 80)}`);
-    }
-    const [_, major, minor, patch] = m;
-    const version = `${major}.${minor}.${patch}`;
-    const needMajor = 0, needMinor = 2, needPatch = 4;
-    const ok =
-      +major > needMajor ||
-      (+major === needMajor && +minor > needMinor) ||
-      (+major === needMajor && +minor === needMinor && +patch >= needPatch);
-    if (!ok) {
-      console.error('');
-      console.error('==============================================================');
-      console.error(`  webui v1.1 requires mcode >= 0.2.4 (0.3.x / 0.4.x supported)`);
-      console.error(`  webui v1.1 需要 mcode >= 0.2.4（已适配 0.3.x / 0.4.x）`);
-      console.error(`  current / 当前版本: mcode ${version}`);
-      console.error(`  upgrade / 升级: npm i -g @minimax-ai/code@latest`);
-      console.error('==============================================================');
-      console.error('');
-      process.exit(1);
-    }
-    console.log(`[webui] mcode ${version} detected (>= 0.2.4 ✓)`);
-  } catch (e) {
-    if (e.message && e.message.includes('requires mcode')) {
-      throw e; // 已知版本不匹配错误, 不 catch
-    }
-    if (e.code === 'ENOENT') {
-      console.error('');
-      console.error('==============================================================');
-      console.error(`  mcode not found at ${MCODE_CMD}`);
-      console.error(`  找不到 mcode: ${MCODE_CMD}`);
-      console.error(`  install / 安装: npm i -g @minimax-ai/code@latest`);
-      console.error('==============================================================');
-      console.error('');
-      process.exit(1);
-    }
-    // 其它错误 (timeout / parse fail) — 警告但不阻塞, 让 server 起来,
-    // 真正发 prompt 时再报错
-    console.warn(`[webui] mcode version check inconclusive: ${e.message}`);
-  }
-}
-checkMcodeVersion()
-
 runStartupCleanup()
 
 // v1.0.1: 初始化 settings (load from disk, generate default token if needed,
@@ -100,27 +45,28 @@ runStartupCleanup()
 //   value lives only in the settings file; if the operator rotates via
 //   the settings card, the new value is broadcast over SSE and shown in
 //   the settings card until acknowledged.
+// v2 (Lease C08, ANTI-PATTERNS-FIX-PLAN §AP1): the raw token is NO LONGER
+//   echoed to stdout. Instead we push `token.first_run` over SSE so the
+//   web UI can show the onboarding modal. The raw token never leaves the
+//   controlled channel (SSE → already-authenticated local UI) and never
+//   touches shell history / Docker logs / systemd journal / screen shares.
+//
+//   TOKEN_STDOUT=1 keeps a single NEUTRAL line ("token persisted to: <path>")
+//   for docker / no-UI environments where no SSE client will connect to
+//   receive the modal. The token value itself is NEVER printed.
 let _printedFirstToken = false
 initSettings({
   printToken: (token) => {
     if (_printedFirstToken) return
     _printedFirstToken = true
-    // Print to stdout, NOT to .server.log — operators running interactively
-    // can copy/paste; headless / service-mode users can `cat` the settings
-    // file at the path printed below.
-    const url = `http://${LAN_IP}:${PORT}/?token=${token}`
-    console.log('')
-    console.log('==============================================================')
-    console.log('  webui 首次启动 — 已生成新的鉴权 token')
-    console.log('==============================================================')
-    console.log(`  token:   ${token}`)
-    console.log(`  远程 URL: ${url}`)
-    console.log('')
-    console.log(`  提示: token 已持久化到 ${getPersistPath()}`)
-    console.log('         远程设备必须通过该 URL (含 ?token=) 访问')
-    console.log('         本机访问 (127.0.0.1) 无需 token')
-    console.log('==============================================================')
-    console.log('')
+    const persistPath = getPersistPath()
+    // Push to any connected SSE client (the UI modal lives here).
+    // No-op if sseByCid is empty (e.g. server started headlessly).
+    pushTokenFirstRun({ token, persistPath })
+    if (TOKEN_STDOUT) {
+      // docker / no-UI fallback — single neutral line, NEVER raw token.
+      console.log(`token persisted to: ${persistPath}`)
+    }
   },
 })
 // Sync tokenAuth master switch from settings → auth module

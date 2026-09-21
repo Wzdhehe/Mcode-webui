@@ -9,6 +9,61 @@ This project follows [Keep a Changelog](https://keepachangelog.com/).
 The `## Unreleased` section at the top tracks changes that have
 landed on the development branch but are not yet cut into a release.
 
+## Unreleased — feat-workspace-lhl
+
+> 工作区选择器重构（feature branch，未合并）
+
+### Added
+
+- **后端原生目录选择器**（`server/lib/workspace.js`）：
+  - `pickDirectoryNative(signal)` — 后端 spawn 原生 OS 对话框，无浏览器授权弹窗
+    - Linux: `zenity --file-selection --directory` → `kdialog --getexistingdirectory` fallback
+    - macOS: `osascript -e "choose folder"`
+    - Windows: PowerShell `System.Windows.Forms.FolderBrowserDialog`
+  - `getRecentWorkspaces(search, limit)` — 从 sessions DB 模糊搜索最近工作区（上限 20 条）
+- **新 API 端点**：
+  - `GET /api/workspace/recent?search=&limit=` — 返回最近工作区列表 + tmpDir
+  - `POST /api/workspace/pick` — 触发原生目录选择器
+
+### Changed
+
+- **前端工作区弹层**（`public/index.html` + `public/app/events.js`）：
+  - 推翻 `webkitdirectory` input（触发浏览器上传 UI）和 `showDirectoryPicker`（Chrome 首次授权弹窗）
+  - 改为：搜索框（300ms debounce）→ recent 列表（后端 DB 模糊搜索）→「创建或打开新空间」触发原生 picker →「无需工作空间」
+  - Chip 下拉（`ws-quick-picker`）改为使用 HTML 静态 DOM，而非动态创建
+
+## v2.0.0 — 2026-09-20 (工业化重写，同步自 MiniMax-Code-Plugins PR #55 @ 7b4aae8)
+
+v1.x 单体 `server.js` 的工业化重写。本轮同步包含 PR #55 全量 26 提交，
+含 2026-09-20 浏览器全交互面手工审计后的修复批（授权闸 UI 接线、切会话
+正文回填、发送失败可见化等）。
+
+### Added
+
+- 追加式事件流 + SHA-256 哈希链审计（防篡改留痕，fail-closed）
+- 逐请求 `authorize()` 授权闸 + `needs_authorization` SSE → 前端模态框
+  （批准/拒绝/倒计时/跨页签同步，`POST /api/auth/decision`）
+- 独立异常告警通道（SSE）+ 铃铛告警面（角标 + 弹层）
+- 会话切换正文回填（`server/lib/transcript.js`，v2 `data_json` 探针，
+  400 行/200KB 封顶，失败不阻断切换）；标题走缓存快路径
+- 虚拟滚动千会话列表、跨工作区会话搜索、会话导出（Markdown/JSON）
+- 限流（per-IP/token）、配额预测、令牌引导弹窗、本地 SBOM + CVE 门
+- i18n 中英双语全键位对齐
+
+### Changed
+
+- 单体 `server.js` 拆分为 `server/routes/` + `server/lib/` 模块面，
+  前端拆分为 `public/app/` 模块（state/render/events/i18n）
+- 测试面 1034 例（单元 + mocked + 集成 + 矩阵），零 npm 运行时依赖
+
+### Fixed
+
+- v2 授权闸前端半边缺失导致的八类受闸操作静默悬挂（删除/导出/跨区
+  搜索//clear//new/重置 token）
+- 切换 mcode 会话聊天区空白、首次切换 2s 无反馈、标题降级占位符
+- 发送失败永久「思考中」不可见（思考状态三处复位 + 告警面）
+- 本地模式下套餐用量按钮零尺寸、外观切换无效果、i18n 裸键泄漏
+
 ## v1.1.1 — 2026-09-19 (内置浏览器实测修复)
 
 在内置浏览器对 0.4.2 实测过程中发现并修复的 4+2 个缺陷。

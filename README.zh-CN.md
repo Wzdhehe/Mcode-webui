@@ -1,4 +1,4 @@
-# Mcode Web UI
+# mcode Web UI
 
 **[English](README.md) | [简体中文](README.zh-CN.md)**
 
@@ -11,7 +11,7 @@
 > 套餐用量右向展开，token 鉴权局域网，移动端响应。
 
 ```
-[浏览器 :8080] ←─ SSE /api/events ─ [Node server.js] ─ mcode acp / exec ─ [Mcode CLI]
+[浏览器 :8080] ←─ SSE /api/events ─ [Node server.js] ─ mcode acp / exec ─ [mcode CLI]
       │                                     │
       └──── REST /api/* ────────────────────┴── ~/.minimax/v2 sqlite（读 + 删会话）
 ```
@@ -49,17 +49,47 @@
 - **单色主题** —— "Ink & Paper" 暗 / 亮双主题，跟随系统
 - **两种传输** —— `mcode acp`（默认，多轮）+ `mcode exec`
   兜底（用于老版本客户端 / 降级模式）
-- **会话控制 (v1.0.2, mcode 0.2.4+)** —— fork (从指定消息分叉新会话)、
-  queue (LLM 响应中排队新消息)、steer (引导当前 turn 不打断)、
-  resume (接续最近 mcode session)、mode switch (切 plan / permission / model) —
-  10 个新 acp RPC + 4 个新 sessionUpdate 通知 + 8 条新 webui 路由 + 完整 UI
+
+## 界面预览
+
+`docs/screenshots/` 下的 PNG 是 **真实截图**，2026-09-20 用
+ego-browser skill 在运行的 v2.0.0 服务器
+（`PORT=8123 HOST=127.0.0.1 MCODE_CMD=/Users/moc/.minimax-code/bin/mcode`）
+上抓取。覆盖最有代表性的五个视图：启动界面、恢复中的 "Greeting"
+会话对话中段、左下设置面板（暗色 / 英文 / 局域网访问）、已输入但
+未发送的输入框、提交后展示 SSE delta 流。
+
+| # | 说明 |
+|---|---|
+| 1 | **启动界面** — 首次启动的空白聊天视图：顶部栏含 workspace / model / LAN 标识、空对话区、底部 prompt 输入框 |
+| 2 | **对话中段** — webui 渲染 "Greeting" 会话：历史已加载、SSE 流式助手回复进行中、页内 tok/s 表、每回合上下文窗口标识 |
+| 3 | **设置面板** — 左下卡片，含外观（暗色）、语言（英文）、局域网访问开关；点 "LAN Access" 触发 `POST /api/settings` 并通过 `auth.token_rotated` SSE 广播 |
+| 4 | **输入框已输入** — 输入 textarea 显示真实用户 prompt（"Can you list the files in this workspace?"），含 send/stop 控件、`/` 命令提示、`@file` 注入提示、回车发送提示 |
+| 5 | **提交后 + 工具调用** — 按下回车后的 webui：用户消息已渲染、助手回合流式输出、（若模型选择）Bash / Read / Write 工具调用块，含结构化参数预览，调用结束后自动折叠箭头 |
+
+### 内联预览
+
+下方图片链接使用相对路径 `docs/screenshots/`，在插件树
+`plugins/Wzdhehe/mcode-webui/` 下可正确解析。
+
+![启动界面 — 首次启动的空白聊天视图](docs/screenshots/01-startup.png)
+
+![对话中段 — Greeting 会话已加载，SSE delta 进行中](docs/screenshots/02-chat-session.png)
+
+![设置面板 — 外观 / 语言 / 局域网访问开关](docs/screenshots/03-settings-panel.png)
+
+![输入框已输入 — 真实 prompt 加 send/stop 控件 + 斜杠提示](docs/screenshots/04-chat-typed.png)
+
+![提交后 + 工具调用 — 用户消息已渲染、助手 SSE delta 流式、工具调用块已展开](docs/screenshots/05-tool-call.png)
+
+> 想贡献截图？见 [CONTRIBUTING.md](CONTRIBUTING.md#screenshots)。
 
 ## 快速开始
 
 ```bash
-git clone https://github.com/Wzdhehe/Mcode-webui.git
-cd Mcode-webui
-node server.js                 # Mcode CLI 自动探测
+git clone https://github.com/Wzdhehe/mcode-webui.git
+cd mcode-webui
+node server.js                 # mcode CLI 自动探测
 # → http://127.0.0.1:8080/     (局域网：http://<局域网IP>:8080/)
 
 # 在共享网络上推荐加 token：
@@ -106,16 +136,15 @@ webui 在 `mcode-rpc.js` 把这些列白名单 + 优雅降级（toast + 兜底�
 
 `plugins/Wzdhehe/mcode-webui/` 是 Agent Plugins 1.0 规范的产物，
 会提交到[官方插件社区](https://github.com/MiniMax-AI/MiniMax-Code-Plugins)。
-
-```bash
-npm run validate:plugin   # 契约检查（跟官方门禁镜像）
-npm run package:plugin    # dist/Wzdhehe/mcode-webui/ + .zip
-```
+插件树本身即提交产物（一个目录 = 一个插件）。历史脚本
+`validate:plugin` / `package:plugin` 已随脚本集收口删除，现行命令为
+`npm run check`（对齐闸）与 `npm test` 等，全量清单见
+[docs/CI.md](docs/CI.md)。
 
 ## 贡献
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)。`npm test`（382 通过 + 1 跳过）
-和 `npm run lint` 必须保持全绿；插件树（`plugins/.../mcode-webui/`）
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。`npm test` 与 `npm run check`
+必须保持全绿；插件树（`plugins/.../mcode-webui/`）
 的副本与仓库根保持同步。
 
 ## 开源协议
@@ -124,8 +153,7 @@ MIT —— 见 [LICENSE](plugins/Wzdhehe/mcode-webui/LICENSE)。
 
 ## 命名说明
 
-"Mcode-webui" 这个名字里 "mcode" 是上游 CLI 工具名，"webui" 是
-它的 Web 界面后缀。所以 "Mcode CLI 的 webui" = "mcode 这个命令行
+"mcode-webui" 这个名字里 "mcode" 是上游 CLI 工具名，"webui" 是
+它的 Web 界面后缀。所以 "mcode CLI 的 webui" = "mcode 这个命令行
 工具的 Web 界面"，不是 "mcode 命令行版的 Web 工具"。两者方向
 相反。
-

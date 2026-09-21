@@ -1,304 +1,181 @@
 // webui/server/lib/slash.js
-// Slash-command inline handlers used by /api/send (webui-level, no mcode exec).
+// Gate-bearing shell over the interaction/feedback subsystem split. See
+// BORROW-dsh-deepseek-harness-2026-08-28 § 3 (Subsystem split) and lease
+// B04 for the rationale.
+//
+// ROUTES MUST IMPORT FROM HERE, NOT from interaction/commands.js.
+//   (2026-09-20 rigor fix: routes/chat.js used to import the raw
+//   dispatcher directly, which made the B03 authorize() gate and the
+//   write-ahead audit below dead code in production. interaction/
+//   commands.js is the UNGATED implementation — only this shell may
+//   import its dispatchers, so the gate sits before every mutation.)
+//
+// The 6 modules in interaction/ and feedback/ own the seams; this
+// shell glues their public surface and adds the security invariants
+// (gate + audit) that must not be bypassed by import-site choice.
+//
+// B01: the destructible commands (/clear /new) live in interaction/
+// commands.js (B04's scope). B01 cannot modify that file. We wrap
+// the two public dispatchers here to add an audit append() around
+// each call. The wrapper records intent (cmd + cid) BEFORE the
+// dispatch and lets the underlying handler do the mutation; if the
+// handler returns `{ handled: false }` (i.e. not a webui command),
+// no audit event is written.
+//
+// B03: per-request authorize() gate. The /clear and /new commands
+//   destroy chat history — AP10's root-cause fix requires a user
+//   confirmation before mutation. We catch the cmd here (in the
+//   shell that B03 owns), call authorize("slash.clear", ctx), and:
+//     - approved  → delegate to the interaction/ handler
+//     - declined  → append a "● 已取消" note to chat and return
+//                  {handled:true, continueMcode:false} so the caller
+//                  doesn't forward to mcode
+//   This places the gate BEFORE the actual mutation in interaction/
+//   commands.js without requiring changes to that file (B04's scope).
 
-import { randomUUID } from "node:crypto";
+import { append as _eventsAppend } from "./events.js";
+import { authorize } from "./authorize.js";
 import {
-  loadSessions,
-  saveSessions,
-  persistCurrentChat,
-  resetContext,
-} from "./sessions.js";
-import { ensureMcodeCommands } from "./acp-client.js";
-import { runUsageQuery } from "./usage.js";
-import { pushStateFor } from "./state-bus.js";
+  matchSlash as _matchSlash,
+  handleLocalSlash as _handleLocalSlashImpl,
+  handleCmdCommand as _handleCmdCommandImpl,
+} from "./interaction/commands.js";
 
-// 列出 webui 支持的 slash 命令前缀（字母数字 + 连字符）
-const SLASH_REGEX = /^\/([a-zA-Z][\w-]*)\b\s*(.*)/;
+// B03 helper: check whether this cmd triggers the destructive gate.
+//   textPath: handleLocalSlash receives a content string and uses
+//     matchSlash() to derive the cmd.
+//   buttonPath: handleCmdCommand receives the cmd directly (with or
+//     without leading "/").
+function _destructiveCmd(cmdName) {
+  return cmdName === "clear" || cmdName === "new";
+}
+
+// B03 helper: append a decline note to the chat so the user gets
+//   visible feedback when they (or the 5-min timeout) blocked the
+//   destructive command. Mirrors the production handlers' style of
+//   pushing a string into cs.chat. NOTE (2026-09-20 rigor fix): this
+//   helper deliberately does NOT import state-bus to push a state
+//   frame — the note rides the next per-cid push (handleSend pushes
+//   before dispatch; the underlying handlers push after mutation).
+//   The ack'd HTTP response has already returned by then (both
+//   /api/send and /api/cmd are fire-and-forget), so there is no
+//   route-level push after handleLocalSlash / handleCmdCommand
+//   returns, contrary to what an earlier revision of this comment
+//   claimed.
+function _appendDeclineNote(cs, cid, cmd, decidedBy) {
+  if (!cs) return;
+  const note = `● 已取消 /${cmd} (授权未通过: ${decidedBy})`;
+  cs.chat = [...(cs.chat || []), note];
+  // Reference cid so eslint --unused-vars passes; cid is part of the
+  //   public API contract even though this particular helper doesn't
+  //   use it (the route uses cid to scope the state push).
+  void cid;
+}
 
 export function matchSlash(content) {
-  const m = content.match(SLASH_REGEX);
-  if (!m) return null;
-  return { cmd: m[1], rest: m[2] || "" };
+  return _matchSlash(content);
 }
 
-// 处理 webui 端 slash 命令（不发 mcode）。
-// 返回 true 表示已处理（路由就 return；不继续 mcode 调用）
-// 返回 false 表示不是 webui 命令，继续走 mcode
 export async function handleLocalSlash(content, cs, cid) {
-  const m = matchSlash(content);
-  if (!m) return false;
-  const { cmd, rest } = m;
-
-  // v0.5.bx-15: /goal <text> — webui 端设 goal + 改写 content 让 mcode 真收到
-  // v0.5.bx-22 (改): 不要 return — 改写 content 为 goal text, 让 mcode 真正收到并开始执行
-  if (cmd === "goal") {
-    const goalText = rest.trim();
-    if (!goalText) {
-      const t = `● 用法: /goal <目标内容> — 在右栏 "目标" 区设一个目标, 后续用 /goal-done 或 /goal-blocked 标记完成状态`;
-      cs.chat = [...(cs.chat || []), t];
-      pushStateFor(cid);
-      persistCurrentChat(cs);
+  const m = _matchSlash(content);
+  // B03 gate: /clear and /new — destructive. Await user confirmation
+  //   BEFORE delegating to interaction/commands.js (where the actual
+  //   cs.chat mutation happens).
+  if (m && _destructiveCmd(m.cmd)) {
+    const authResult = await authorize("slash.clear", {
+      cid,
+      cmd: m.cmd,
+      chatLen: (cs && cs.chat || []).length,
+      sessionId: (cs && cs.sessionId) || null,
+      mcodeSessionId: (cs && cs.mcodeSessionId) || null,
+      source: "local_slash",
+    });
+    if (!authResult.approved) {
+      _appendDeclineNote(cs, cid, m.cmd, authResult.decidedBy);
       return { handled: true, continueMcode: false };
     }
-    cs.goal = {
-      active: true,
-      text: goalText,
-      status: "in_progress",
-      duration: null,
-      startTs: Date.now(),
-    };
-    // pre-slash 之前加了 '› /goal ${goalText}' 行,这里替换成 '› ${goalText}' (跟 mcode 实际收到的对齐)
-    if (Array.isArray(cs.chat) && cs.chat.length > 0) {
-      const last = cs.chat[cs.chat.length - 1];
-      if (
-        last === `› /goal ${goalText}` ||
-        last === `› /goal ${rest}` ||
-        last === `› ${content}`
-      ) {
-        cs.chat = [...cs.chat.slice(0, -1), `› ${goalText}`];
-      }
-    }
-    cs.chat = [
-      ...(cs.chat || []),
-      `● 已设目标: ${goalText} — 转发给 mcode 触发执行, 完成后用 /goal-done 标记 ✅`,
-    ];
-    pushStateFor(cid);
-    persistCurrentChat(cs);
-    if (process.env.MCODE_USAGE_DEBUG)
-      console.log(`[goal.set] cid=${cid} text="${goalText}"`);
-    // v0.5.bx-22: 改写 content 为 goal text, 继续走 mcode 调用 (不 return!)
-    return { handled: true, continueMcode: true, rewriteContent: goalText };
+    // Write-ahead audit (2026-09-20 rigor fix): durable intent line
+    // BEFORE the chat mutation. append() is fail-closed — a failed
+    // write propagates to the caller (routes/chat.js → HTTP 5xx +
+    // alert) with cs.chat untouched. We deliberately do NOT catch
+    // and decline-note here: an unaudited destructive command must
+    // abort loudly, not "succeed" silently on a broken audit disk.
+    _eventsAppend("slash.clear.intent", {
+      target: (cs && cs.sessionId) || "(no-session)",
+      cid,
+      actor: "user",
+      payload: {
+        source: "local_slash",
+        cmd: m.cmd,
+        chatLenBefore: ((cs && cs.chat) || []).length,
+        authorize: { decidedBy: authResult.decidedBy, decidedAt: authResult.decidedAt },
+      },
+    });
+    // Delegate; then record the outcome AFTER the mutation (also
+    // fail-closed / propagating — same rationale as the intent).
+    const result = await _handleLocalSlashImpl(content, cs, cid);
+    _eventsAppend("chat.clear", {
+      target: (cs && cs.sessionId) || "(no-session)",
+      cid,
+      actor: "user",
+      payload: {
+        source: "local_slash",
+        cmd: m.cmd,
+        chatLenBefore: ((cs && cs.chat) || []).length,
+        authorize: { decidedBy: authResult.decidedBy, decidedAt: authResult.decidedAt },
+      },
+    });
+    return result;
   }
-
-  // v0.5.bx-15: /goal-done 或 /goal-blocked — 手动标 goal 状态
-  if (cmd === "goal-done" || cmd === "goal-blocked") {
-    if (!cs.goal || !cs.goal.active) {
-      const t = `● 当前没有 active 目标, 用 /goal <内容> 先设一个`;
-      cs.chat = [...(cs.chat || []), t];
-      pushStateFor(cid);
-      persistCurrentChat(cs);
-      return { handled: true, continueMcode: false };
-    }
-    const newStatus = cmd === "goal-done" ? "complete" : "blocked";
-    cs.goal = {
-      ...cs.goal,
-      active: false,
-      status: newStatus,
-      duration: cs.goal.startTs ? Date.now() - cs.goal.startTs : null,
-    };
-    cs.chat = [
-      ...(cs.chat || []),
-      `● 目标已标 ${newStatus === "complete" ? "完成 ✅" : "阻塞 ⛔"}: ${cs.goal.text || ""}`,
-    ];
-    pushStateFor(cid);
-    persistCurrentChat(cs);
-    if (process.env.MCODE_USAGE_DEBUG)
-      console.log(`[goal.${newStatus}] cid=${cid}`);
-    return { handled: true, continueMcode: false };
-  }
-
-  if (cmd === "clear" || cmd === "new") {
-    if (cmd === "new") {
-      const all = loadSessions();
-      const id = randomUUID();
-      const item = {
-        id,
-        title: "New session",
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        chat: [],
-      };
-      all.unshift(item);
-      saveSessions(all);
-      cs.sessionId = id;
-      cs.sessionTitle = item.title;
-    } else {
-      cs.chat = [];
-      persistCurrentChat(cs);
-    }
-    cs.chat = [];
-    cs.usage = {
-      ...cs.usage,
-      sessionInput: 0,
-      sessionOutput: 0,
-      sessionTotal: 0,
-    };
-    if (cmd === "new") {
-      cs.mcodeSessionId = null;
-      cs.sessionTitle = "New session";
-    } else {
-      cs.mcodeSessionId = null;
-      cs.sessionTitle = "Untitled";
-    }
-    resetContext(cs);
-    pushStateFor(cid);
-    return { handled: true, continueMcode: false };
-  }
-
-  if (cmd === "status") {
-    const t = `● 当前 model=${cs.model.name}\n  workspace=${cs.workspace.dir}\n  权限=${cs.permissions}`;
-    cs.chat = [...cs.chat, t];
-    pushStateFor(cid);
-    return { handled: true, continueMcode: false };
-  }
-
-  if (cmd === "usage" || cmd === "help") {
-    if (cmd === "help") {
-      const cmds = await ensureMcodeCommands();
-      const lines = ["● 可用命令："];
-      for (const c of cmds.webui) lines.push(`  /${c.name} — ${c.desc}`);
-      if (Array.isArray(cmds.mcode) && cmds.mcode.length > 0) {
-        for (const c of cmds.mcode) {
-          if (typeof c === "string") lines.push(`  /${c}`);
-          else if (c && c.name)
-            lines.push(
-              `  /${c.name}${c.description ? " — " + c.description : ""}`,
-            );
-        }
-      } else if (cmds.source && cmds.source.startsWith("error")) {
-        lines.push(`  (mcode 命令拉取失败：${cmds.source.slice(7)})`);
-      } else {
-        lines.push(`  (mcode 命令待拉取…)`);
-      }
-      const t = lines.join("\n");
-      cs.chat = [...cs.chat, `› /help`, t];
-      pushStateFor(cid);
-      persistCurrentChat(cs);
-      return { handled: true, continueMcode: false };
-    }
-    if (cmd === "usage") {
-      await runUsageQuery(cs, cid);
-      return { handled: true, continueMcode: false };
-    }
-  }
-
-  // 其他命令走 mcode exec
-  return { handled: false, continueMcode: true };
+  // Non-destructive paths (status / help / usage / goal / etc.):
+  //   unchanged from B01 — no gate, no extra audit.
+  return _handleLocalSlashImpl(content, cs, cid);
 }
 
-// 处理 /api/cmd 端的命令（前端 button 触发）
 export async function handleCmdCommand(cmd, cs, cid) {
-  if (cmd === "/new") {
-    // v0.5.ak: mcode 还在跑时禁止清空 chat
-    if (cs.running && cs.running.active) {
-      cs.chat = [
-        ...(cs.chat || []),
-        `! [warn] AI 还在回复中，先停止当前任务再新建会话`,
-      ];
-      pushStateFor(cid);
-      return { handled: true };
+  const name = typeof cmd === "string" && cmd.startsWith("/") ? cmd.slice(1) : cmd;
+  // B03 gate: same destructive set as handleLocalSlash. The /api/cmd
+  //   path is button-driven (UI panel buttons); the gate fires for
+  //   every clear/new click.
+  if (_destructiveCmd(name)) {
+    const authResult = await authorize("slash.clear", {
+      cid,
+      cmd: name,
+      chatLen: (cs && cs.chat || []).length,
+      sessionId: (cs && cs.sessionId) || null,
+      mcodeSessionId: (cs && cs.mcodeSessionId) || null,
+      source: "cmd_button",
+    });
+    if (!authResult.approved) {
+      _appendDeclineNote(cs, cid, name, authResult.decidedBy);
+      return { handled: true, continueMcode: false };
     }
-    // v0.5.ak: 避免 0 对话下无限新建
-    const isEmpty = !cs.chat || cs.chat.length === 0;
-    const isDefaultTitle =
-      !cs.sessionTitle ||
-      cs.sessionTitle === "Untitled" ||
-      cs.sessionTitle === "New session";
-    if (cs.sessionId && isEmpty && isDefaultTitle) {
-      pushStateFor(cid);
-      return { handled: true };
-    }
-    const all = loadSessions();
-    const id = randomUUID();
-    const item = {
-      id,
-      title: "New session",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      chat: [],
-    };
-    all.unshift(item);
-    saveSessions(all);
-    cs.sessionId = id;
-    cs.mcodeSessionId = null;
-    cs.sessionTitle = item.title;
-    cs.chat = [];
-    cs.usage = {
-      ...cs.usage,
-      sessionInput: 0,
-      sessionOutput: 0,
-      sessionTotal: 0,
-    };
-    resetContext(cs);
-    pushStateFor(cid);
-    return { handled: true };
+    // Write-ahead intent — see handleLocalSlash for the rationale.
+    _eventsAppend("slash.clear.intent", {
+      target: (cs && cs.sessionId) || "(no-session)",
+      cid,
+      actor: "user",
+      payload: {
+        source: "cmd_button",
+        cmd: name,
+        chatLenBefore: ((cs && cs.chat) || []).length,
+        authorize: { decidedBy: authResult.decidedBy, decidedAt: authResult.decidedAt },
+      },
+    });
+    const result = await _handleCmdCommandImpl(cmd, cs, cid);
+    // Outcome — AFTER the mutation, fail-closed (propagates).
+    _eventsAppend("chat.clear", {
+      target: (cs && cs.sessionId) || "(no-session)",
+      cid,
+      actor: "user",
+      payload: {
+        source: "cmd_button",
+        cmd: name,
+        chatLenBefore: ((cs && cs.chat) || []).length,
+        authorize: { decidedBy: authResult.decidedBy, decidedAt: authResult.decidedAt },
+      },
+    });
+    return result;
   }
-  if (cmd === "/status") {
-    const t = `● 当前 model=${cs.model.name}\n  workspace=${cs.workspace.dir}\n  权限=${cs.permissions}`;
-    cs.chat = [...(cs.chat || []), `› /status`, t];
-    pushStateFor(cid);
-    persistCurrentChat(cs);
-    return { handled: true };
-  }
-  if (cmd === "/clear") {
-    cs.chat = [];
-    cs.usage = {
-      ...cs.usage,
-      sessionInput: 0,
-      sessionOutput: 0,
-      sessionTotal: 0,
-    };
-    cs.mcodeSessionId = null;
-    cs.sessionTitle = "Untitled";
-    resetContext(cs);
-    persistCurrentChat(cs);
-    pushStateFor(cid);
-    return { handled: true };
-  }
-  if (cmd === "/sessions") {
-    const all = loadSessions();
-    const t =
-      `● 最近 ${all.length} 个会话：\n` +
-      all
-        .slice(0, 8)
-        .map((s, i) => `  ${i + 1}. ${s.title} (${s.id.substring(0, 8)}…)`)
-        .join("\n");
-    cs.chat = [...(cs.chat || []), `› /sessions`, t];
-    pushStateFor(cid);
-    persistCurrentChat(cs);
-    return { handled: true };
-  }
-  if (cmd === "/help") {
-    const cmds = await ensureMcodeCommands();
-    const lines = ["● 可用命令："];
-    for (const c of cmds.webui) lines.push(`  /${c.name} — ${c.desc}`);
-    if (Array.isArray(cmds.mcode) && cmds.mcode.length > 0) {
-      for (const c of cmds.mcode) {
-        if (typeof c === "string") lines.push(`  /${c}`);
-        else if (c && c.name)
-          lines.push(
-            `  /${c.name}${c.description ? " — " + c.description : ""}`,
-          );
-      }
-    } else if (cmds.source && cmds.source.startsWith("error")) {
-      lines.push(`  (mcode 命令拉取失败：${cmds.source.slice(7)})`);
-    } else {
-      lines.push(`  (mcode 命令待拉取，第一次 /help 时已触发…)`);
-    }
-    const t = lines.join("\n");
-    cs.chat = [...(cs.chat || []), `› /help`, t];
-    pushStateFor(cid);
-    persistCurrentChat(cs);
-    return { handled: true };
-  }
-  if (cmd === "/usage") {
-    await runUsageQuery(cs, cid);
-    return { handled: true };
-  }
-  if (cmd === "/stop") {
-    const { getActiveChild } = await import("./state-bus.js");
-    const child = getActiveChild(cid);
-    const wasRunning = !!child;
-    if (child) {
-      try {
-        child.kill();
-      } catch {}
-    }
-    const t = wasRunning ? `● 已发送停止信号` : `● 没有正在运行的任务`;
-    cs.chat = [...(cs.chat || []), `› /stop`, t];
-    pushStateFor(cid);
-    persistCurrentChat(cs);
-    return { handled: true };
-  }
-  return { handled: false };
+  return _handleCmdCommandImpl(cmd, cs, cid);
 }

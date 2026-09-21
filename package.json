@@ -1,30 +1,29 @@
 {
   "name": "mcode-webui",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "HTTP/SSE wrapper for mcode exec --output-format stream-json. Zero deps, Node 22+.",
+  "description": "v2.0.0 industrializes the v1.x surface with append-only event stream + SHA-256 hash chain, per-request authorize() gate (fail-closed audit), independent anomaly SSE channel, write-ahead intent/outcome audit events, interaction/feedback subsystem split, plugin metadata drift detector, local SBOM + CVE gates, rate limiting, virtual chat list, cross-workspace session search, session export (Markdown / JSON), quota forecast, and token-onboarding modal. Zero npm dependencies; runs on Node 22+.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node --experimental-test-module-mocks --test test/*.test.js",
-    "coverage": "c8 --reporter=text --reporter=lcov node --experimental-test-module-mocks --test test/*.test.js",
-    "lint": "eslint server/ test/",
-    "format": "prettier --write server/ test/",
-    "package:plugin": "node scripts/package-plugin.mjs",
-    "validate:plugin": "node scripts/validate-plugin.mjs",
-    "verify": "node scripts/verify.mjs"
+    "electron": "electron electron-main.cjs --no-sandbox --disable-gpu",
+    "test": "node --experimental-test-module-mocks --test test/*.test.js checks/*.check.mjs test/integration/*.test.js test/matrix/*.test.js",
+    "test:unit": "node --test test/*.test.js",
+    "test:mocked": "node --experimental-test-module-mocks --test checks/*.check.mjs",
+    "test:integration": "node --experimental-test-module-mocks --test test/integration/*.test.js test/matrix/*.test.js",
+    "check": "node scripts/check-docs-alignment.mjs",
+    "check:ci": "node scripts/check-docs-alignment.mjs --ci",
+    "sbom": "node scripts/gen-sbom.mjs",
+    "coverage": "c8 --reporter=text --reporter=lcov node --experimental-test-module-mocks --test test/*.test.js checks/*.check.mjs test/integration/*.test.js test/matrix/*.test.js"
   },
   "engines": {
     "node": ">=22.19 <23 || >=24 <27"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "c8": "^12.0.0",
-    "eslint": "^10.8.1",
-    "globals": "^17.11.0",
-    "prettier": "^3.9.6"
+    "electron": "^36.0.0"
   },
   "c8": {
     "include": [

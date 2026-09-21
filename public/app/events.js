@@ -5,8 +5,10 @@
 
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
-import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, closeApiKeyModal, connect, es, getGeneralQuota, leftOpen, openApiKeyModal, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setLeftOpen, setRightOpen, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
-import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderLanCardContent, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
+// v2.0 (feat-workspace-lhl): 零弹窗目录选择（showDirectoryPicker 优先，webkitdirectory 回退）
+import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, clearAlerts, closeApiKeyModal, connect, es, getGeneralQuota, getPendingAuthRequests, leftOpen, markAllAlertsRead, openApiKeyModal, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setLeftOpen, setRightOpen, setSearchQuery, setSidebarReady, setState, state, submitAuthDecision, toggleUsagePopover, tokenParam, urlParams } from './state.js'
+import { pickDirectory } from './native-fs.js'
+import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, AUTH_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAlerts, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderLanCardContent, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
 
 export let slashOpen = false
 export let slashQuery = ''
@@ -131,39 +133,31 @@ export function toggleMode() {
   modePopover.hidden = !modeOpen
 }
 export function hideMode() { modeOpen = false; modePopover.hidden = true }
-// webui 内部 mode label → mcode acp mode 值 (从 server/routes/model.js handleListPermissionModes 同步)
-//   跟 server/lib/mcode-rpc.js 的 mcodePermissionToWebui 互为反向
-const WEBUI_TO_MCODE_MODE = {
-  ask: 'default',           // 每次敏感操作都问
-  auto: 'auto',             // 仅高风险询问
-  full: 'bypassPermissions', // 不询问 (旧 label 叫 full / "Full access")
-  read: 'read',             // 只读
-  off: 'off',               // 关
-  plan: 'plan',             // Plan 模式 (mcode 0.2.4 支持)
-}
-
 export async function setMode(mode) {
-  // v1.0.2: mcode 0.2.4 acp 真支持 session/set_mode, 改走新 RPC
-  //   之前 v0.5.by 只更新 webui UI label, mcode 实际不变 — 那个 v0.1.5 acp 妥协
-  //   现在 webui mode label → mcode mode (通过 WEBUI_TO_MCODE_MODE 翻译)
+  // v0.5.by: plan 模式本地 toggle — mcode 0.1.5 acp 不支持 session/set_mode (probe 验证 Method not found)
+  //   fallback: send() 时给 prompt 加 plan 模板前缀, 强制 mcode 按 Plan: 格式输出
+  //   这是 mcode 0.1.5 唯一可行的进 plan mode 路径
+  //   (goal 模式: 之前是按钮, mcode 0.1.5 不支持, 删了按钮. 用 /goal slash command 代替)
   hideMode()
   if (mode === 'plan') {
-    // plan mode: webui 端本地 toggle (state.planMode) — 不通过 mcode acp
-    //   plan mode 是 webui 内部"加 plan 模板前缀"的开关, 不是 mcode acp 模式
     state.planMode = !state.planMode
     showToast(state.planMode ? t('plan_mode_on') : t('plan_mode_off'), 2500)
     return
   }
-  // 权限 mode (ask/auto/full/read/off) — 翻译成 mcode acp 值, 调 setSessionMode (新 RPC)
-  const mcodeMode = WEBUI_TO_MCODE_MODE[mode] || 'bypassPermissions'
-  if (state.planMode) state.planMode = false
+  // 权限 mode (ask/auto/full/read) — mcode 0.1.5 acp 不支持 mid-session 改 permissionMode
+  //   server 仅更新 webui UI, mcode 实际 mode 不变 (启动时已固定)
   try {
-    await setSessionMode(mcodeMode)  // 调 /api/chat/mode, 调 McodeAcpClient.setMode
-    showToast('已切到 ' + mode, 1500)  // 简易反馈 (todo: 改成 i18n key)
-  } catch (e) {
-    console.error('[setMode]', e)
-    showToast('Mode change failed: ' + e.message, 3000)
-  }
+    const r = await fetch('/api/permissions' + API_SUFFIX, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...HEADERS },
+      body: JSON.stringify({ mode })
+    })
+    const j = await r.json().catch(() => ({}))
+    if (state.planMode) state.planMode = false
+    if (j && j.ok === true) {
+        showToast(t('perm_mode_note'), 4500)
+    }
+  } catch (e) { console.error(e) }
 }
 
 // ============================================================
@@ -463,6 +457,20 @@ export function attachEvents() {
   if (btnAppearance) {
     btnAppearance.addEventListener('click', (e) => {
       e.stopPropagation()
+      // v2 (2026-09-20 webui-manual-audit D3): click now CYCLES the theme
+      //   (toggleTheme — applies data-theme + persists to localStorage
+      //   'webui-theme' + re-syncs the card checkbox/label/icon) AND
+      //   toggles the appearance card open, in that order. Root cause of
+      //   the audit finding "clicking does nothing": the v2026-08-28
+      //   rework made the button ONLY reveal the card (whose theme toggle
+      //   checkbox then needed a second, discoverable-only-by-trial
+      //   interaction) — a click on the button itself had no directly
+      //   observable effect (data-theme never moved, and the card is a
+      //   .lan-card, invisible to any popover probe). Cycling here gives
+      //   immediate feedback; the card still opens so the 套餐用量
+      //   "启用" toggle (the quota master switch) stays reachable, and
+      //   applyTheme() keeps its checkbox in sync with the cycled state.
+      toggleTheme()
       toggleAppearanceCard()
     })
   }
@@ -509,6 +517,47 @@ export function attachEvents() {
     toggleUsagePopover()
   })
 
+  // ----------------------------------------------------------------
+  // v2 (2026-09-20 webui-manual-audit D1): anomaly-channel bell —
+  //   topbar #btn-alerts toggles #alerts-popover. Opening marks all
+  //   current alerts read (badge drops, list stays); the header's
+  //   清空 button empties the list (state.js clearAlerts keeps the
+  //   seen-id set so a reconnect snapshot can't resurrect the badge).
+  //   Bind-once here, DOM owned by render.js renderAlerts().
+  // ----------------------------------------------------------------
+  const btnAlerts = document.getElementById('btn-alerts')
+  const alertsPopover = document.getElementById('alerts-popover')
+  const alertsClear = document.getElementById('alerts-clear')
+  function setAlertsPopoverOpen(open) {
+    if (!alertsPopover || !btnAlerts) return
+    alertsPopover.hidden = !open
+    btnAlerts.setAttribute('aria-expanded', open ? 'true' : 'false')
+    if (open) {
+      // Marking-read on open — the popover shows the full list either
+      // way; the badge is purely "not yet looked at".
+      markAllAlertsRead()
+      renderAlerts()
+    }
+  }
+  if (btnAlerts) {
+    btnAlerts.addEventListener('click', (e) => {
+      e.stopPropagation()
+      setAlertsPopoverOpen(alertsPopover ? alertsPopover.hidden : false)
+    })
+  }
+  if (alertsClear) {
+    alertsClear.addEventListener('click', (e) => {
+      e.stopPropagation()
+      clearAlerts()
+    })
+  }
+  // Click outside closes (same pattern as the usage popover / lan card).
+  document.addEventListener('click', (e) => {
+    if (!alertsPopover || alertsPopover.hidden) return
+    if (alertsPopover.contains(e.target) || (btnAlerts && btnAlerts.contains(e.target))) return
+    setAlertsPopoverOpen(false)
+  })
+
   // v0.5.ak: 模型切换 — btn-model click 弹 model-picker popover
   // v0.5.bh: 拉 /api/models 显示可选列表，点一个直接切（用户反馈：不想手输）
   const modelPicker = document.getElementById('model-picker')
@@ -517,45 +566,6 @@ export function attachEvents() {
   async function loadModelList() {
     if (!modelPickerList) return
     modelPickerList.innerHTML = '<div class="model-picker-loading">' + t('model_picker_loading') + '</div>'
-    // v1.1: 优先用 0.3+ 的 session configOptions (probe 实测: 这是模型
-    // 切换的标准面 — 真实时值 + 当前选中标记 + BYOK 渠道一并出现)
-    try {
-      const cr = await fetch('/api/chat/config-options' + API_SUFFIX, { headers: HEADERS })
-      const cd = await cr.json().catch(() => ({}))
-      if (cd.ok && Array.isArray(cd.configOptions)) {
-        const modelOpt = cd.configOptions.find((o) => o && o.id === 'model')
-        if (modelOpt && Array.isArray(modelOpt.options) && modelOpt.options.length > 0) {
-          const current = modelOpt.currentValue || ''
-          modelPickerList.innerHTML = modelOpt.options.map((o) => {
-            const isCurrent = o.value === current
-            return '<button class="model-picker-item-btn' + (isCurrent ? ' current' : '') + '" data-model-id="' + (o.value || '').replace(/"/g, '&quot;') + '">' +
-                   '<span>' + (o.name || o.value) + '</span>' +
-                   '<span class="provider">' + t('model_picker_acp_source') + '</span>' +
-                   '</button>'
-          }).join('')
-          modelPickerList.querySelectorAll('.model-picker-item-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-              const id = btn.getAttribute('data-model-id') || ''
-              modelPicker.hidden = true
-              try {
-                // 走 set_config_option (acp.mjs 兼容 0.2.x {key,value} 形状)
-                await fetch('/api/chat/config-option' + API_SUFFIX, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', ...HEADERS },
-                  body: JSON.stringify({ key: 'model', value: id }),
-                })
-                const r = await fetch('/api/state' + API_SUFFIX, { headers: HEADERS })
-                if (r.ok) { setState(await r.json()); render() }
-                showToast && showToast(t('model_switched') + ' ' + id, 1500)
-              } catch (e) { console.error('[set-config-model]', e) }
-            })
-          })
-          return
-        }
-      }
-    } catch (e) {
-      console.warn('[models] config-options unavailable, falling back to /api/models', e)
-    }
     try {
       const r = await fetch('/api/models' + API_SUFFIX, { headers: HEADERS })
       const d = await r.json()
@@ -589,7 +599,7 @@ export function attachEvents() {
             // 服务端 pushStateFor 自动更新 state，render() 会被 SSE 推过来触发
             // 但保险起见主动 fetch 一次
             const r = await fetch('/api/state' + API_SUFFIX, { headers: HEADERS })
-            if (r.ok) { setState(await r.json()); render() }
+            if (r.ok) { state = await r.json(); render() }
             showToast && showToast(t('model_switched') + ' ' + id, 1500)
           } catch (e) { console.error('[set-model]', e) }
         })
@@ -645,61 +655,26 @@ export function attachEvents() {
     }
   })
 
-  // v0.5.al: workspace 切换 — chip-workspace click 弹 popover
+  // v2 (feat-workspace-lhl): 工作区弹层 — 搜索框 + recent 列表 + 原生 picker 按钮
+  // 实现方案：dsh 同款后端 spawn 原生 OS 对话框（无浏览器授权弹窗）
   const wsPicker = document.getElementById('workspace-picker')
-  const wsInput = document.getElementById('workspace-picker-input')
-  const wsCurrent = document.getElementById('workspace-picker-current')
   const wsChip = document.getElementById('chip-workspace')
-  const wsRecentsEl = document.getElementById('workspace-picker-recents')
-  const wsRecentsList = document.getElementById('workspace-picker-recents-list')
-  const wsSyncCheckbox = document.getElementById('workspace-picker-sync')
+  const wsSearchInput = document.getElementById('ws-picker-search')
+  const wsRecentList = document.getElementById('ws-picker-recent-list')
+  const wsCreateBtn = document.getElementById('ws-picker-pick-btn')
+  const wsNoWsBtn = document.getElementById('ws-picker-nows-btn')
+  const emptyWsBtn = document.getElementById('chat-empty-workspace')
 
-  // localStorage 工具：保存/读取 recents
-  const WS_RECENTS_KEY = 'webui_workspace_recents_v1'
   const WS_LAST_KEY = 'webui_workspace_last_v1'
-  function loadWsRecents() {
-    try { return JSON.parse(localStorage.getItem(WS_RECENTS_KEY) || '[]') } catch { return [] }
-  }
-  function saveWsRecents(arr) {
-    try { localStorage.setItem(WS_RECENTS_KEY, JSON.stringify(arr.slice(0, 5))) } catch {}
-  }
-  function pushWsRecent(dir) {
-    if (!dir) return
-    const cur = loadWsRecents().filter(d => d !== dir)
-    cur.unshift(dir)
-    saveWsRecents(cur)
-  }
-  function renderWsRecents() {
-    const recents = loadWsRecents()
-    if (recents.length === 0) {
-      wsRecentsEl.hidden = true
-      return
-    }
-    wsRecentsEl.hidden = false
-    wsRecentsList.innerHTML = ''
-    for (const dir of recents) {
-      const btn = document.createElement('div')
-      btn.className = 'workspace-picker-recent'
-      btn.textContent = dir
-      btn.title = dir
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation()
-        wsInput.value = dir
-        submitWorkspaceChange({ dir })
-      })
-      wsRecentsList.appendChild(btn)
-    }
-  }
+  const WS_SEARCH_DEBOUNCE_MS = 300
+  const WS_RECENT_LIMIT = 20
 
-  function positionWsPicker() {
-    // v0.5.bg: 用户反馈"显示不全" — 改成屏幕居中显示（fixed + 50% translate），不再跟 chip
-    if (!wsPicker) return
-    // 居中定位（fixed + transform）
-    wsPicker.style.top = '50%'
-    wsPicker.style.left = '50%'
-    wsPicker.style.transform = 'translate(-50%, -50%)'
-  }
+  // 缓存
+  let wsRecentCache = []  // [{dir, count}]
+  let wsTmpDir = ''
+  let wsSearchTimer = null
 
+  // ---- 核心：切换工作区 ----
   async function submitWorkspaceChange(payload) {
     try {
       const r = await fetch('/api/workspace' + API_SUFFIX, {
@@ -710,12 +685,10 @@ export function attachEvents() {
       const data = await r.json()
       if (data.ok) {
         if (payload && payload.dir) {
-          pushWsRecent(data.workspace.dir)
           try { localStorage.setItem(WS_LAST_KEY, data.workspace.dir) } catch {}
         }
         wsPicker.hidden = true
-        // server 会 push state，render() 自动更新 chip + 输入区
-        // 立即本地 fallback（不等 SSE）
+        hideWsQuickPicker()
         if (state) {
           state.workspace = data.workspace
           render()
@@ -729,257 +702,236 @@ export function attachEvents() {
     }
   }
 
+  // ---- 搜索 & recent 列表渲染 ----
+  function wsRenderRecent(items) {
+    if (!wsRecentList) return
+    if (!items || items.length === 0) {
+      wsRecentList.innerHTML = '<div class="ws-picker-recent-empty">暂无最近工作区</div>'
+      return
+    }
+    const cur = (state && state.workspace && state.workspace.dir) || ''
+    const folderIcon = `<svg class="ws-picker-recent-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`
+    wsRecentList.innerHTML = items.map(item => {
+      const active = item.dir === cur ? ' active' : ''
+      const name = wsShortName(item.dir) || item.dir
+      // 路径截断至30字符，tooltip显示完整路径
+      const fullPath = item.dir
+      const shortPath = fullPath.length > 30 ? '…' + fullPath.slice(-30) : fullPath
+      const count = item.count > 0 ? `<span class="ws-picker-recent-count">${item.count}</span>` : ''
+      return `<div class="ws-picker-recent-item${active}" data-dir="${escapeHtml(item.dir)}" title="${escapeHtml(fullPath)}">
+        ${folderIcon}
+        <div class="ws-picker-recent-info">
+          <span class="ws-picker-recent-name">${escapeHtml(name)}</span>
+          <span class="ws-picker-recent-path" title="${escapeHtml(fullPath)}">${escapeHtml(shortPath)}</span>
+        </div>${count}
+      </div>`
+    }).join('')
+
+    // 点击即切换
+    wsRecentList.querySelectorAll('.ws-picker-recent-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const dir = el.dataset.dir
+        wsPicker.hidden = true
+        submitWorkspaceChange({ dir, syncTui: false })
+      })
+    })
+  }
+
+  async function wsLoadRecent(search = '') {
+    try {
+      const url = '/api/workspace/recent' + API_SUFFIX + '&search=' + encodeURIComponent(search) + '&limit=' + WS_RECENT_LIMIT
+      const r = await fetch(url, { headers: HEADERS })
+      const data = await r.json()
+      if (data && data.ok) {
+        wsRecentCache = data.items || []
+        wsTmpDir = data.tmpDir || wsTmpDir
+        wsRenderRecent(wsRecentCache)
+      }
+    } catch (e) {
+      console.error('[ws] load recent failed', e)
+      if (wsRecentList) wsRecentList.innerHTML = '<div class="ws-picker-recent-empty">加载失败</div>'
+    }
+  }
+
+  function wsOnSearchInput() {
+    clearTimeout(wsSearchTimer)
+    wsSearchTimer = setTimeout(() => {
+      wsLoadRecent(wsSearchInput.value.trim())
+    }, WS_SEARCH_DEBOUNCE_MS)
+  }
+
+  // ---- 弹层打开 / 关闭 ----
+  function openWsPicker() {
+    const wasHidden = wsPicker.hidden
+    document.querySelectorAll('.mode-popover, .settings-menu, .model-picker, .workspace-picker').forEach(el => { if (el !== wsPicker) el.hidden = true })
+    hideWsQuickPicker()
+    wsPicker.hidden = !wasHidden
+    if (!wsPicker.hidden) {
+      // 清搜索框，加载 recent
+      if (wsSearchInput) { wsSearchInput.value = ''; wsSearchInput.focus() }
+      wsLoadRecent('')
+      setTimeout(() => {
+        wsPicker.style.top = '50%'
+        wsPicker.style.left = '50%'
+        wsPicker.style.transform = 'translate(-50%, -50%)'
+      }, 0)
+    }
+  }
+
   wsChip?.addEventListener('click', (e) => {
     e.stopPropagation()
     openWsPicker()
   })
 
-  // v0.5.ax: 欢迎页的工作区 chip 也触发同样的 popover
-  const emptyWsBtn = document.getElementById('chat-empty-workspace')
+  // ---- 搜索框事件 ----
+  wsSearchInput?.addEventListener('input', wsOnSearchInput)
+  wsSearchInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); wsPicker.hidden = true }
+  })
+
+  // ---- 创建或打开新空间 → fs-picker 模态框（后端 /api/fs/read 逐级浏览） ----
+  wsCreateBtn?.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    wsPicker.hidden = true
+
+    const result = await pickDirectory()
+    if (!result.ok) {
+      if (result.reason === 'cancel') return
+      if (result.reason === 'multiple' && result.candidates) {
+        _showWorkspaceCandidates(result.candidates)
+        return
+      }
+      showToast(result.error || '目录选择失败', 3000)
+      return
+    }
+
+    // fs-picker 返回后端验证过的绝对路径
+    submitWorkspaceChange({ dir: result.dir, syncTui: false })
+  })
+
+  // ---- 多候选选择层 ----
+  function _showWorkspaceCandidates(candidates) {
+    // 先关闭主 picker，打开候选列表弹层（复用 wsPicker 区域）
+    const listEl = document.getElementById('ws-picker-recent-list')
+    if (!listEl) return
+    listEl.innerHTML = '<div class="ws-picker-recent-title" style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px">找到多个同名目录，选择一个：</div>'
+    candidates.forEach(c => {
+      const div = document.createElement('div')
+      div.className = 'ws-picker-recent-item'
+      div.style.cssText = 'padding:8px 10px;cursor:pointer;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px'
+      div.innerHTML = `<span>📁</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(c.path)}">${escapeHtml(c.path)}</span>`
+      div.addEventListener('click', () => {
+        submitWorkspaceChange({ dir: c.path, syncTui: false })
+      })
+      listEl.appendChild(div)
+    })
+    // 添加取消按钮
+    const cancelBtn = document.createElement('button')
+    cancelBtn.textContent = '取消'
+    cancelBtn.style.cssText = 'margin-top:8px;width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--text)'
+    cancelBtn.addEventListener('click', () => {
+      listEl.innerHTML = '<div class="ws-picker-recent-loading">…</div>'
+      wsLoadRecent('')
+    })
+    listEl.appendChild(cancelBtn)
+    // 打开 picker 显示候选
+    wsPicker.hidden = false
+  }
+
+  // ---- 无需工作空间 → 临时目录 ----
+  wsNoWsBtn?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const tmp = wsTmpDir || ''
+    if (!tmp) { showToast(t('ws_nows_unavailable') || '临时目录不可用'); return }
+    wsPicker.hidden = true
+    submitWorkspaceChange({ dir: tmp, syncTui: false })
+  })
+
+  // ---- wsPicker 自身 Escape 关闭 ----
+  wsPicker?.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); wsPicker.hidden = true }
+  })
+
+  // ---- quick picker（chip 下拉）----
+  const wsQuickPicker = document.getElementById('ws-quick-picker')
+  const wsQuickListEl = document.getElementById('ws-quick-list')
+  const wsQuickAddBtn = document.getElementById('ws-quick-add')
+
+  // ---- 欢迎页 chip → quick picker ----
   if (emptyWsBtn) {
     emptyWsBtn.addEventListener('click', (e) => {
       e.stopPropagation()
-      // v0.5.ax: 仅在 welcome 态（无消息）允许改工作区
       const hasMessages = (state?.chat?.length || 0) > 0
       if (hasMessages) {
         showToast(t('workspace_locked_in_chat'))
         return
       }
-      openWsPicker()
+      openWsPicker()  // 打开完整的 workspace-picker（含搜索框 + 创建/打开新空间按钮）
     })
   }
 
-  function openWsPicker() {
-    const wasHidden = wsPicker.hidden
-    // 关掉其他 popover
-    document.querySelectorAll('.mode-popover, .settings-menu, .model-picker, .workspace-picker').forEach(el => { if (el !== wsPicker) el.hidden = true })
-    wsPicker.hidden = !wasHidden
-    if (!wsPicker.hidden) {
-      // 显示当前工作区全路径
+  function openWsQuickPicker() {
+    const picker = wsQuickPicker
+    if (!picker) return
+
+    // 定位：相对于 emptyWsBtn
+    const anchor = emptyWsBtn
+    if (!anchor) return
+    const rect = anchor.getBoundingClientRect()
+    picker.style.top = (rect.bottom + window.scrollY + 4) + 'px'
+    picker.style.left = (rect.left + window.scrollX) + 'px'
+
+    if (wsQuickListEl) wsQuickListEl.innerHTML = '<div class="ws-quick-loading">…</div>'
+    picker.hidden = false
+
+    wsLoadRecent('').then(() => {
+      if (picker.hidden) return
+      let html = ''
       const cur = (state && state.workspace && state.workspace.dir) || ''
-      wsCurrent.textContent = cur || t('workspace_unset')
-      wsInput.value = cur
-      renderWsRecents()
-      // 探测 TUI cwd，让 "跟随 TUI" 按钮显示真实路径（tooltip）
-      fetch('/api/workspace' + API_SUFFIX, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...HEADERS },
-        body: JSON.stringify({ action: 'detect' }),
-      }).then(r => r.json()).then(data => {
-        if (data && data.tuiCwd) {
-          const tuiBtn = document.getElementById('workspace-picker-tui')
-          if (tuiBtn) tuiBtn.title = 'mcode TUI 当前在: ' + data.tuiCwd
-        }
-      }).catch(() => {})
-      setTimeout(() => {
-        positionWsPicker()
-        wsInput.focus()
-        wsInput.select()
-      }, 0)
-    }
+      if (wsRecentCache.length > 0) {
+        wsRecentCache.slice(0, 5).forEach(item => {
+          const active = item.dir === cur ? ' active' : ''
+          html += `<div class="ws-quick-item${active}" data-dir="${escapeHtml(item.dir)}">
+            <span class="ws-quick-name">${escapeHtml(wsShortName(item.dir) || item.dir)}</span>
+            <span class="ws-quick-count">${item.count || 0}</span>
+          </div>`
+        })
+      } else {
+        html += `<div class="ws-quick-empty">${escapeHtml(t('no_workspaces') || '暂无工作区')}</div>`
+      }
+      if (wsQuickListEl) wsQuickListEl.innerHTML = html
+
+      // 点击已有工作区 = 切换
+      if (wsQuickListEl) {
+        wsQuickListEl.querySelectorAll('.ws-quick-item').forEach(item => {
+          item.addEventListener('click', () => {
+            hideWsQuickPicker()
+            submitWorkspaceChange({ dir: item.dataset.dir, syncTui: false })
+          })
+        })
+      }
+    }).catch(() => {
+      if (wsQuickListEl && !picker.hidden) wsQuickListEl.innerHTML = '<div class="ws-quick-empty">加载失败</div>'
+    })
   }
 
-  // 输入框回车 = 切换
-  wsInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      const dir = wsInput.value.trim()
-      if (!dir) return
-      submitWorkspaceChange({ dir, syncTui: wsSyncCheckbox.checked })
-    } else if (e.key === 'Escape') {
-      e.stopPropagation()
-      wsPicker.hidden = true
+  function hideWsQuickPicker() {
+    if (wsQuickPicker) wsQuickPicker.hidden = true
+  }
+
+  // 点击 quick picker 外部关闭
+  document.addEventListener('click', (e) => {
+    if (wsQuickPicker && !wsQuickPicker.hidden && !wsQuickPicker.contains(e.target)) {
+      const anchor = emptyWsBtn
+      if (!anchor || !anchor.contains(e.target)) hideWsQuickPicker()
     }
   })
 
-  // v0.5.by: 3 按钮 (workspace-picker-confirm/tui/reset) HTML 已删 — Enter 键提交已覆盖
-  //   (见上方 wsInput.addEventListener('keydown') Enter 分支)
-
-  // v0.5.am: 可视化目录树浏览（懒加载）
-  const browseToggle = document.getElementById('workspace-picker-browse-toggle')
-  const browsePanel = document.getElementById('workspace-picker-browse-panel')
-  const browseChevron = document.getElementById('workspace-picker-browse-chevron')
-  const breadcrumb = document.getElementById('workspace-picker-breadcrumb')
-  const treeEl = document.getElementById('workspace-picker-tree')
-  const treeLoading = document.getElementById('workspace-picker-tree-loading')
-  // 内存缓存：path -> {ok, children, roots}  避免重复请求
-  const browseCache = new Map()
-  // 当前浏览的目录
-  let browseCurrent = null  // absolute path or null (= roots)
-  let browseOpen = false
-
-  function fetchBrowse(path) {
-    const key = path || '__roots__'
-    if (browseCache.has(key)) return Promise.resolve(browseCache.get(key))
-    const url = '/api/workspace/browse' + API_SUFFIX + (path ? '&path=' + encodeURIComponent(path) : '')
-    return fetch(url, { headers: HEADERS })
-      .then(r => r.json())
-      .then(data => { browseCache.set(key, data); return data })
-  }
-
-  function renderBreadcrumb(dir) {
-    breadcrumb.innerHTML = ''
-    if (!dir) {
-      // 根盘符视图
-      const span = document.createElement('span')
-      span.className = 'workspace-picker-breadcrumb-item'
-      span.textContent = '盘符'
-      span.title = '根盘符'
-      breadcrumb.appendChild(span)
-      return
-    }
-    // 拆路径：["C:", "Users", "<user>", ...]
-    const sep = dir.includes('\\') ? '\\' : '/'
-    const isWin = dir.match(/^[A-Z]:/i)
-    const parts = dir.split(/[\\\/]/).filter(Boolean)
-    let acc = ''
-    if (isWin) {
-      acc = parts.shift() + sep  // "C:\"
-    } else {
-      acc = sep  // "/"
-    }
-    const firstCrumb = document.createElement('span')
-    firstCrumb.className = 'workspace-picker-breadcrumb-item'
-    firstCrumb.textContent = acc
-    firstCrumb.title = isWin ? '回到根盘符' : '/'
-    // 关键修复：firstCrumb 始终跳回根盘符视图（Windows = loadBrowse(null)，Linux = loadBrowse('/')）
-    firstCrumb.addEventListener('click', (e) => {
-      e.stopPropagation()
-      loadBrowse(isWin ? null : '/')
-    })
-    breadcrumb.appendChild(firstCrumb)
-    // 关键修复：第一个 part 之前不加 sep1（firstCrumb 已经以 sep 结尾，否则会出现 "C:\\" 双反斜杠）
-    let isFirst = true
-    for (const p of parts) {
-      if (!isFirst) {
-        const sep1 = document.createElement('span')
-        sep1.className = 'workspace-picker-breadcrumb-sep'
-        sep1.textContent = sep
-        breadcrumb.appendChild(sep1)
-      }
-      isFirst = false
-      acc = joinPath(acc, p, sep)
-      const item = document.createElement('span')
-      item.className = 'workspace-picker-breadcrumb-item'
-      item.textContent = p
-      item.title = acc
-      item.addEventListener('click', (e) => { e.stopPropagation(); loadBrowse(acc) })
-      breadcrumb.appendChild(item)
-    }
-  }
-  function joinPath(base, part, sep) {
-    if (base.endsWith(sep)) return base + part
-    return base + sep + part
-  }
-
-  function renderTreeNodes(parent, children, currentDir) {
-    parent.innerHTML = ''
-    if (!children || children.length === 0) {
-      const empty = document.createElement('div')
-      empty.className = 'workspace-picker-tree-empty'
-      empty.textContent = '（无子目录）'
-      parent.appendChild(empty)
-      return
-    }
-    for (const c of children) {
-      const node = document.createElement('div')
-      node.className = 'workspace-tree-node'
-      if (c.path === currentDir) node.classList.add('current')
-      const chev = document.createElement('span')
-      chev.className = 'workspace-tree-chevron'
-      chev.textContent = '▶'
-      const name = document.createElement('span')
-      name.className = 'workspace-tree-name'
-      name.textContent = c.name
-      name.title = c.path
-      const setBtn = document.createElement('button')
-      setBtn.className = 'workspace-tree-set-btn'
-      setBtn.textContent = '选'
-      setBtn.title = '切换到此目录'
-      const childrenBox = document.createElement('div')
-      childrenBox.className = 'workspace-tree-children'
-      childrenBox.hidden = true
-
-      // 展开 / 收起
-      chev.addEventListener('click', async (e) => {
-        e.stopPropagation()
-        if (childrenBox.hidden) {
-          // 展开
-          if (!childrenBox.dataset.loaded) {
-            chev.classList.add('loading')
-            chev.textContent = '…'
-            const data = await fetchBrowse(c.path)
-            chev.classList.remove('loading')
-            chev.textContent = '▶'
-            if (data.ok) {
-              childrenBox.innerHTML = ''
-              // 递归：子节点也用同样渲染（但要传入 currentDir 包含关系判断）
-              renderTreeNodes(childrenBox, data.children, currentDir)
-              childrenBox.dataset.loaded = '1'
-            } else {
-              const err = document.createElement('div')
-              err.className = 'workspace-picker-tree-error'
-              err.textContent = '加载失败: ' + (data.error || '未知')
-              childrenBox.innerHTML = ''
-              childrenBox.appendChild(err)
-            }
-          }
-          childrenBox.hidden = false
-          chev.classList.add('open')
-        } else {
-          childrenBox.hidden = true
-          chev.classList.remove('open')
-        }
-      })
-      // 点击 name = 进入该目录（重渲染树为该目录的子目录）
-      name.addEventListener('click', (e) => {
-        e.stopPropagation()
-        loadBrowse(c.path)
-      })
-      // 选 = 切换工作区
-      setBtn.addEventListener('click', (e) => {
-        e.stopPropagation()
-        submitWorkspaceChange({ dir: c.path, syncTui: wsSyncCheckbox.checked })
-      })
-
-      node.appendChild(chev)
-      node.appendChild(name)
-      node.appendChild(setBtn)
-      parent.appendChild(node)
-      parent.appendChild(childrenBox)
-    }
-  }
-
-  async function loadBrowse(path) {
-    browseCurrent = path
-    renderBreadcrumb(path)
-    treeEl.innerHTML = '<div class="workspace-picker-tree-loading">加载中…</div>'
-    const data = await fetchBrowse(path)
-    if (!data.ok) {
-      treeEl.innerHTML = `<div class="workspace-picker-tree-error">加载失败: ${data.error || '未知'}</div>`
-      return
-    }
-    treeEl.innerHTML = ''
-    if (data.roots) {
-      // 根盘符视图
-      const cur = (state && state.workspace && state.workspace.dir) || ''
-      renderTreeNodes(treeEl, data.roots.map(r => ({ name: r, path: r })), cur)
-    } else {
-      const cur = (state && state.workspace && state.workspace.dir) || ''
-      renderTreeNodes(treeEl, data.children, cur)
-    }
-  }
-
-  browseToggle.addEventListener('click', async (e) => {
+  // 「添加工作区」按钮（HTML 中的静态按钮）
+  wsQuickAddBtn?.addEventListener('click', (e) => {
     e.stopPropagation()
-    browseOpen = !browseOpen
-    browsePanel.hidden = !browseOpen
-    browseToggle.classList.toggle('open', browseOpen)
-    if (browseOpen) {
-      // 初始：从当前工作区（或根盘符）开始
-      const cur = (state && state.workspace && state.workspace.dir) || null
-      await loadBrowse(cur)
-    }
+    hideWsQuickPicker()
+    openWsPicker()
   })
 
   // 点击 popover 外关掉
@@ -988,8 +940,6 @@ export function attachEvents() {
       wsPicker.hidden = true
     }
   })
-  // 窗口 resize / scroll 重新定位
-  window.addEventListener('resize', () => { if (!wsPicker.hidden) positionWsPicker() })
 
   // v0.5.bh: 监听网络状态变化，实时更新顶栏在线指示
   window.addEventListener('online',  () => { try { render() } catch (e) {} })
@@ -1382,11 +1332,14 @@ export function attachEvents() {
 
   // New chat
   // v0.5.ar: 新建会话 → 弹工作区选择 popover（选完工作区再调 /api/sessions）
+  // v0.5.bx-33 (v1.2): 已删除 new-chat-ws-picker，改用 chat-empty-workspace chip 下拉
   const newChatPicker = document.getElementById('new-chat-ws-picker')
   const newChatCurrent = document.getElementById('new-chat-current-ws')
   const newChatList = document.getElementById('new-chat-ws-list')
   const newChatCancel = document.getElementById('new-chat-ws-cancel')
   const newChatOther = document.getElementById('new-chat-ws-other')
+  // 仅在元素存在时初始化（兼容旧版 picker，v1.2+ 已移除）
+  if (newChatPicker) {
   function positionNewChatPicker() {
     const btn = document.getElementById('btn-new-chat')
     if (!btn) return
@@ -1453,6 +1406,7 @@ export function attachEvents() {
       newChatPicker.hidden = true
     }
   })
+  } // end if (newChatPicker)
 
   async function createNewSession(workspace) {
     // v0.5.ak: mcode 还在跑时禁止清空 chat
@@ -1501,7 +1455,7 @@ export function attachEvents() {
     }
     // 关掉所有 popover
     document.querySelectorAll('.mode-popover, .settings-menu, .model-picker, .workspace-picker, .new-chat-picker').forEach(el => { el.hidden = true })
-    newChatPicker.hidden = true
+    if (newChatPicker) newChatPicker.hidden = true
     render()
   }
 
@@ -1873,6 +1827,64 @@ export function attachModalEvents() {
   on('ask-modal', 'click', (e) => {
     if (e.target.id === 'ask-modal') closeAskModal()
   })
+  // v2 (2026-09-20 webui-manual-audit): authorize modal Approve/Deny →
+  // POST /api/auth/decision (state.js submitAuthDecision, which owns the
+  // queue removal on 200/404). One decision per request: both buttons
+  // disable on the first click and stay disabled while the POST is in
+  // flight (render.js respects AUTH_MODAL_STATE.decidingRequestId and
+  // does not re-enable them on re-render); fetch failure shows inside
+  // the modal and re-enables so the user can retry. NEVER auto-approves
+  // on any condition — countdown hitting 00:00 is visual only, the
+  // server's 5-minute fail-closed timeout is the authority.
+  const authApproveBtn = $('auth-modal-approve')
+  const authDenyBtn = $('auth-modal-deny')
+  const authErr = $('auth-modal-error')
+  const decideAuth = async (approve) => {
+    const req = getPendingAuthRequests()[0]
+    if (!req) return
+    // One decision per request: a POST for THIS head request already in
+    // flight → ignore. (Compared by id, not truthiness — a stale id left
+    // over from the previous, already-resolved head must not block the
+    // next request's decision.)
+    if (AUTH_MODAL_STATE.decidingRequestId === req.requestId) return
+    AUTH_MODAL_STATE.decidingRequestId = req.requestId
+    if (authApproveBtn) authApproveBtn.disabled = true
+    if (authDenyBtn) authDenyBtn.disabled = true
+    if (authErr) { authErr.hidden = true; authErr.textContent = '' }
+    let r = null
+    try {
+      r = await submitAuthDecision(req.requestId, approve)
+    } catch (e) {
+      // network error — surface inside the modal + allow retry
+      AUTH_MODAL_STATE.decidingRequestId = null
+      if (authApproveBtn) authApproveBtn.disabled = false
+      if (authDenyBtn) authDenyBtn.disabled = false
+      if (authErr) {
+        authErr.hidden = false
+        authErr.textContent = `${t('auth_decision_failed')}: ${e?.message || String(e)}`
+      }
+      return
+    }
+    if (!(r && (r.ok || r.status === 404))) {
+      // Real failure (400 / 5xx …) — surface + allow retry. 200/404 are
+      // already handled inside submitAuthDecision (local queue removal
+      // + modal re-render closes or advances).
+      AUTH_MODAL_STATE.decidingRequestId = null
+      if (authApproveBtn) authApproveBtn.disabled = false
+      if (authDenyBtn) authDenyBtn.disabled = false
+      if (authErr) {
+        let msg = `${t('auth_decision_failed')}${r && r.status ? ' (HTTP ' + r.status + ')' : ''}`
+        try {
+          const j = await r.json()
+          if (j && j.error) msg += ': ' + j.error
+        } catch {}
+        authErr.hidden = false
+        authErr.textContent = msg
+      }
+    }
+  }
+  if (authApproveBtn) authApproveBtn.addEventListener('click', () => decideAuth(true))
+  if (authDenyBtn) authDenyBtn.addEventListener('click', () => decideAuth(false))
   // Plan
   on('plan-close', 'click', () => {
     fetch('/api/answer' + API_SUFFIX, {
@@ -1921,354 +1933,4 @@ export function attachModalEvents() {
     })
   }
 }
-
-// ============================================================
-// v1.0.2: mcode 0.2.4 control surface — buttons + handlers
-// ============================================================
-
-// 排队当前 textarea 内容 (LLM 响应进行中)
-export async function queueCurrentMessage() {
-  const textarea = document.getElementById('input-textarea')
-  const text = (textarea.value || '').trim()
-  if (!text) return
-  try {
-    const r = await fetch('/api/chat/queue' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ text }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      textarea.value = ''
-      autoResize()
-      if (typeof showToast === 'function') showToast(t('queue_queued'))
-      // v1.1.1: 徽标数据源已改为服务端台账（SSE 推送），无需 client 端拉取
-    } else {
-      if (typeof showToast === 'function') showToast(j.error || 'queue failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('queue error: ' + e.message)
-  }
-}
-
-// 改写队列里某条
-export async function queueUpdateItem(itemId, newText) {
-  if (!itemId || !newText) return
-  try {
-    const r = await fetch('/api/chat/queue/update' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ itemId, text: newText }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (!j.ok && typeof showToast === 'function') {
-      showToast(j.error || 'queue update failed')
-    } else {
-      await refreshQueueList()
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('queue update error: ' + e.message)
-  }
-}
-
-// 从队列删一条
-export async function queueDeleteItem(itemId) {
-  if (!itemId) return
-  try {
-    const r = await fetch('/api/chat/queue/delete' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ itemId }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (!j.ok && typeof showToast === 'function') {
-      showToast(j.error || 'queue delete failed')
-    } else {
-      await refreshQueueList()
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('queue delete error: ' + e.message)
-  }
-}
-
-// 队列项触发 steer (v1.1: queue-list 面板按钮)
-export async function queueSteerItem(itemId) {
-  if (!itemId) return
-  try {
-    const r = await fetch('/api/chat/queue/steer' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ itemId }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      if (typeof showToast === 'function') showToast(t('steer_notice'))
-    } else {
-      if (typeof showToast === 'function') showToast(j.error || 'steer failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('steer error: ' + e.message)
-  }
-}
-
-// v1.1: mcode 0.3+ 不推 queue_update 通知 (probe 实测) — 队列徽标/清单
-// 的数据源改为「变更后主动拉取」: queue/update/delete/steer 成功后、
-// 以及展开队列清单时调用
-export async function refreshQueueList() {
-  try {
-    const r = await fetch('/api/chat/queue' + API_SUFFIX, { headers: HEADERS })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      state.mcodeQueue = j.items || []
-      render()
-    }
-  } catch (e) {
-    console.warn('[queue] refresh failed', e)
-  }
-}
-
-// 引导当前 turn
-export async function steerCurrentResponse(text) {
-  const s = (text || '').trim()
-  if (!s) return
-  try {
-    const r = await fetch('/api/chat/steer' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ text: s }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      if (typeof showToast === 'function') showToast(t('steer_notice'))
-    } else {
-      if (typeof showToast === 'function') showToast(j.error || 'steer failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('steer error: ' + e.message)
-  }
-}
-
-// 切 session 模式 (plan / default / acceptEdits / bypassPermissions)
-export async function setSessionMode(mode) {
-  if (!mode) return
-  try {
-    const r = await fetch('/api/chat/mode' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ mode }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (!j.ok && typeof showToast === 'function') {
-      showToast(j.error || 'mode change failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('mode error: ' + e.message)
-  }
-}
-
-// 改 session config (e.g. model 切换)
-export async function setSessionConfig(key, value) {
-  if (!key) return
-  try {
-    const r = await fetch('/api/chat/config-option' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ key, value }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (!j.ok && typeof showToast === 'function') {
-      showToast(j.error || 'config change failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('config error: ' + e.message)
-  }
-}
-
-// 从 mcode session 某条消息分叉
-export async function forkFromMessage(atMessageId) {
-  if (!atMessageId) return
-  if (!confirm(t('fork_confirm'))) return
-  try {
-    const r = await fetch('/api/sessions/fork' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ atMessageId }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      if (typeof showToast === 'function') showToast(t('fork_success'))
-    } else {
-      if (typeof showToast === 'function') showToast(j.error || t('fork_failed'))
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('fork error: ' + e.message)
-  }
-}
-
-// 接续 mcode session (Ctrl+U 走这里)
-export async function resumeMostRecent() {
-  try {
-    const r = await fetch('/api/sessions/resume' + API_SUFFIX, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...HEADERS },
-      body: JSON.stringify({ strategy: 'most-recent' }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (j.ok) {
-      if (typeof showToast === 'function') showToast(t('resume_strategy_most_recent'))
-    } else {
-      if (typeof showToast === 'function') showToast(j.error || 'resume failed')
-    }
-  } catch (e) {
-    if (typeof showToast === 'function') showToast('resume error: ' + e.message)
-  }
-}
-
-// 绑定 v1.0.2 control surface 按钮 (在 attachEvents() 里调)
-//   v1.0.2 设计: btn-send 保持原 stop 行为 (plan §Q3 "前端 UI 不用动"),
-//   queue 走独立 btn-queue 按钮 — 跟 btn-send 解耦, 用户在 LLM 响应中也能点 queue
-//
-//   重要: btn-mode 和 btn-model 的 click handler 已有 (events.js:396 + 473),
-//   不要重复注册 — 重复注册会导致 handler 顺序触发, popover 一开一关 = 用户看不到
-export function attachControlSurface() {
-  // v1.0.2: 独立 Queue 按钮 — 永远把 textarea 内容加到 mcode queue
-  //   (无论 running 与否, btn-queue 都是 queue 操作 — running 时更突出)
-  const btnQueue = document.getElementById('btn-queue')
-  if (btnQueue) {
-    btnQueue.addEventListener('click', (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-      queueCurrentMessage()
-    })
-  }
-  // v1.0.2: queue badge 展开/收起队列列表
-  const queueBadge = document.getElementById('queue-badge')
-  if (queueBadge) {
-    queueBadge.addEventListener('click', (e) => {
-      e.preventDefault()
-      const list = document.getElementById('queue-list')
-      if (list) {
-        const opening = list.hidden
-        list.hidden = !list.hidden
-        // v1.1: 展开时拉一次最新队列 (0.3+ 无推送)
-        if (opening) refreshQueueList()
-      }
-    })
-  }
-  // v1.0.2: 顶栏 Steer 按钮 (LLM 响应中可见)
-  const btnSteer = document.getElementById('btn-steer')
-  if (btnSteer) {
-    btnSteer.addEventListener('click', () => {
-      const text = prompt(t('steer_input_placeholder'))
-      if (text) steerCurrentResponse(text)
-    })
-  }
-  // 注意: btn-mode 和 btn-model 的 click handler 已在 attachEvents() 里绑定 (events.js:396, 473)
-  //   不要重复! 重复会导致 popover 一开一关, 用户看不到
-  // 暴露到 window 方便其他模块调
-  try {
-    window.__webui_v102 = {
-      forkFromMessage,
-      resumeMostRecent,
-      setSessionMode,
-      setSessionConfig,
-      queueCurrentMessage,
-      queueUpdateItem,
-      queueDeleteItem,
-      steerCurrentResponse,
-    }
-  } catch {}
-}
-
-// v1.0.2 Round 6: Goal 6 个 REST 客户端 + Goal clear 按钮 + Ask 倒计时
-//   - createGoal / patchGoal / clearGoal / getGoal 调 /api/chat/goal
-//   - Ask modal 倒计时: 30s 客户端兜底 (mcode 0.2.4 文档没列, 实际可能不暴露)
-export async function createGoal(objective, tokenBudget) {
-  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...HEADERS },
-    body: JSON.stringify({ objective, ...(tokenBudget ? { tokenBudget } : {}) }),
-  })
-  return r.json().catch(() => ({}))
-}
-export async function patchGoal(fields) {
-  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', ...HEADERS },
-    body: JSON.stringify(fields),
-  })
-  return r.json().catch(() => ({}))
-}
-export async function clearGoal() {
-  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json', ...HEADERS },
-  })
-  return r.json().catch(() => ({}))
-}
-export async function getGoal() {
-  const r = await fetch('/api/chat/goal' + API_SUFFIX, {
-    method: 'GET',
-    headers: { ...HEADERS },
-  })
-  return r.json().catch(() => ({}))
-}
-
-// Ask modal 30s 倒计时 (客户端兜底)
-//   bindAskModal 打开 ask-modal 时调 startAskCountdown(); 关闭时调 stopAskCountdown()
-let _askCountdownTimer = null
-let _askCountdownRemaining = 0
-export function startAskCountdown(seconds = 30) {
-  stopAskCountdown()
-  const banner = document.getElementById('ask-countdown')
-  const secondsEl = document.getElementById('ask-countdown-seconds')
-  if (!banner || !secondsEl) return
-  _askCountdownRemaining = seconds
-  banner.hidden = false
-  secondsEl.textContent = String(_askCountdownRemaining)
-  _askCountdownTimer = setInterval(() => {
-    _askCountdownRemaining -= 1
-    if (_askCountdownRemaining <= 0) {
-      stopAskCountdown()
-      // v1.0.2 R6 audit fix: 到 0 自动续接 — 调 askModalNextOrSend 走完整模板化 Q/A 提交
-      //   (跟用户点 send 按钮一样, 走 ASK_MODAL_STATE 模板化所有题目)
-      //   之前 sendAskAnswer({option:'default'}) 错 — sendAskAnswer 接 text 不是对象
-      try {
-        const modal = document.getElementById('ask-modal')
-        if (modal && !modal.hidden && typeof askModalNextOrSend === 'function') {
-          askModalNextOrSend()
-        }
-      } catch (e) {
-        console.warn('[ask-countdown] auto-resume failed:', e)
-      }
-      return
-    }
-    secondsEl.textContent = String(_askCountdownRemaining)
-  }, 1000)
-}
-export function stopAskCountdown() {
-  if (_askCountdownTimer) {
-    clearInterval(_askCountdownTimer)
-    _askCountdownTimer = null
-  }
-  const banner = document.getElementById('ask-countdown')
-  if (banner) banner.hidden = true
-}
-
-// 绑定 Goal 顶部交互 (清空按钮)
-export function attachGoalBar() {
-  const clearBtn = document.getElementById('goal-bar-clear')
-  if (clearBtn) {
-    clearBtn.addEventListener('click', async () => {
-      if (!confirm(t('goal_clear_confirm'))) return
-      try {
-        await clearGoal()
-        if (typeof showToast === 'function') showToast(t('goal_clear_btn'))
-      } catch (e) {
-        console.warn('[goal-bar] clear failed:', e)
-      }
-    })
-  }
-}
-
 
