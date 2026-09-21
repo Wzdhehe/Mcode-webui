@@ -262,6 +262,21 @@
     }
 
     // ----------------------------------------------------------
+    // 公共 API
+    // ----------------------------------------------------------
+
+    /** 打开对话框，返回 Promise<{ canceled: boolean, path?: string }> */
+    pick() {
+      return new Promise((resolve) => {
+        this._resolve = resolve;
+        this._reset();
+        this._show();
+        // 立即加载初始目录
+        this._load(this.currentPath);
+      });
+    }
+
+    // ----------------------------------------------------------
     // 状态管理
     // ----------------------------------------------------------
 
@@ -292,7 +307,14 @@
         const res = this._resolve;
         this._resolve = null;
         this._reject = null;
-        res(result);
+        // 统一返回 { canceled, path } 格式
+        if (result === null || result === undefined) {
+          res({ canceled: true });
+        } else if (typeof result === 'string') {
+          res({ canceled: false, path: result });
+        } else {
+          res(result);
+        }
       }
       // 动画结束后销毁 DOM
       setTimeout(() => this.destroy(), 300);
