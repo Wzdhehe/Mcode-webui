@@ -14,6 +14,9 @@
   // 工具函数
   // ============================================================
 
+  // 知名目录关键字（对标 File System Access API 的 startIn），由后端映射真实路径
+  const WELL_KNOWN_DIRS = ['documents', 'desktop', 'downloads', 'music', 'pictures', 'videos'];
+
   /** 解析路径的父目录 */
   function parentPath(path) {
     if (!path || path === '/') return null;
@@ -81,7 +84,8 @@
   class FsPicker {
     constructor(options = {}) {
       this.options = options;
-      this.currentPath = options.defaultPath || this._getHomeDir();
+      // 默认起始位置：documents（后端映射到 XDG Documents，中文系统为 ~/文档）
+      this.currentPath = options.defaultPath || 'documents';
       this.selectedPaths = new Set();
       this.entries = [];
       this.filterText = '';
@@ -286,7 +290,7 @@
     // ----------------------------------------------------------
 
     _reset() {
-      this.currentPath = this.options.defaultPath || this._getHomeDir();
+      this.currentPath = this.options.defaultPath || 'documents';
       this.selectedPaths.clear();
       this.entries = [];
       this.filterText = '';
@@ -601,9 +605,10 @@
     }
 
     _normPath(path) {
-      if (!path) return '~';
+      if (!path) return 'documents';
       path = path.trim().replace(/\\/g, '/');
-      // ~ 开头：保持原样，由后端 expandHome 展开为用户主目录
+      // 知名目录关键字 / ~ 开头：保持原样，由后端 resolveTarget 映射真实路径
+      if (WELL_KNOWN_DIRS.includes(path)) return path;
       if (path === '~' || path.startsWith('~/')) return path;
       if (!path.startsWith('/')) {
         // 相对路径：拼到当前路径
