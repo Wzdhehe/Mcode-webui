@@ -85,6 +85,7 @@
       this.selectedPaths = new Set();
       this.entries = [];
       this.filterText = '';
+      this._home = null; // 用户目录，从后端 API 获取
       this._visible = false;
       this._resolve = null;   // Promise resolve
       this._reject = null;    // Promise reject
@@ -306,7 +307,7 @@
     }
 
     _getHomeDir() {
-      return process?.env?.HOME || process?.env?.USERPROFILE || '/';
+      return this._home || '/';
     }
 
     // ----------------------------------------------------------
@@ -346,6 +347,8 @@
       }
       const json = await resp.json();
       if (json.error) throw new Error(json.error);
+      // 首次加载时从响应中获取用户目录
+      if (json.home) this._home = json.home;
       return json.data || [];
     }
 
