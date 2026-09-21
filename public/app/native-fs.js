@@ -36,26 +36,92 @@ async function pickDirectoryElectron() {
 
 /**
  * 浏览器环境：使用 browser-fs-access 获取目录
- * 注意：File System Access API 返回的是 FileSystemDirectoryHandle，不是路径
+ *
+ * 策略：先用 startIn: 'documents' 打开 Documents 让用户选择，
+ *       然后用 getParent() 获取 Documents 的父目录（用户主目录）。
+ *       最后用 resolve() 计算用户选择的目录相对于主目录的路径，
+ *       从而拼接出完整的绝对路径。
+ *
+ * 关键技术点：
+ *   - directoryOpen 允许用户在整个文件系统中自由导航（不仅限于 Documents）
+ *   - getParent() 是 Chromium 扩展 API，可获取任意目录的父目录句柄
+ *   - resolve() 计算相对路径
  */
 async function pickDirectoryBrowser() {
   try {
-    const handle = await directoryOpen({
+    // 打开 Documents 作为起始参考点
+    // 用户可以在打开的界面中自由导航到任意位置
+    const selectedHandle = await directoryOpen({
       mode: 'read',
       recursive: false,
+      startIn: 'documents',
     })
-    // directoryOpen 返回的是目录句柄数组，取第一个
-    if (!handle || !handle.length) {
+
+    if (!selectedHandle || !selectedHandle.length) {
       return null
     }
-    const dirHandle = Array.isArray(handle) ? handle[0] : handle
-    // FileSystemDirectoryHandle 没有 path 属性，需要特殊处理
-    // 在 Electron 中可以尝试从 handle 获取路径
-    if (dirHandle?.path) {
-      return dirHandle.path
+
+    const dirHandle = Array.isArray(selectedHandle) ? selectedHandle[0] : selectedHandle
+
+    // 尝试获取 Documents 目录句柄作为基准
+    let documentsHandle = null
+    try {
+      // 先尝试通过 getParent() 获取 Documents 的父目录
+      // 从 dirHandle 向上遍历直到找到名称为 "Documents" 的目录
+      let current = dirHandle
+      while (current) {
+        // 尝试获取父目录（Chromium 扩展 API）
+        let parent = null
+        try {
+          parent = await current.getParent()
+        } catch {
+          // getParent() 不存在或失败
+          break
+        }
+
+        if (!parent) break
+
+        // 检查父目录的名称
+        try {
+          const name = await parent.resolve(current)
+          if (name && name[0] === 'Documents') {
+            documentsHandle = parent
+            break
+          }
+        } catch {
+          // resolve() 失败
+        }
+
+        current = parent
+      }
+    } catch (e) {
+      console.warn('[native-fs] getParent traversal failed:', e)
     }
-    // 无法获取路径，返回 handle 的 name 作为标识
-    return dirHandle?.name || null
+
+    // 如果找到了 Documents 的父目录，计算相对路径并拼接
+    if (documentsHandle) {
+      try {
+        // 计算 dirHandle 相对于 documentsHandle 的路径
+        const relativePath = await documentsHandle.resolve(dirHandle)
+        if (relativePath && relativePath.length > 0) {
+          // relativePath 是一个数组，如 ["Documents", "subfolder"] 或 ["Desktop", "folder"]
+          // Documents 的父目录就是用户主目录
+          // 拼接：父目录 + relativePath
+          const absolutePath = '~/' + relativePath.join('/')
+          return absolutePath
+        }
+      } catch (e) {
+        console.warn('[native-fs] resolve failed:', e)
+      }
+    }
+
+    // 兜底方案：直接返回选中的目录名称（相对路径）
+    // 在 Electron 环境下调用方可以据此计算绝对路径
+    if (dirHandle?.name) {
+      return dirHandle.name
+    }
+
+    return null
   } catch (e) {
     if (e?.name === 'AbortError' || e?.message === 'canceled') {
       return null
