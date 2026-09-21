@@ -7,6 +7,13 @@ import { readdirSync, statSync, mkdirSync } from 'node:fs'
 import { join, resolve, extname, basename } from 'node:path'
 import { homedir } from 'node:os'
 
+// 展开 ~ 为用户主目录（前端地址栏允许输入 ~/xxx）
+function expandHome(p) {
+  if (p === '~') return homedir()
+  if (p.startsWith('~/')) return join(homedir(), p.slice(2))
+  return p
+}
+
 // 权限字符串
 function modeToString(mode) {
   const octal = (mode & 0o777).toString(8).padStart(3, '0')
@@ -38,7 +45,7 @@ function getIconType(name, stat) {
 // 读取目录条目
 export function readDirectory(targetPath, opts = {}) {
   const { limit = 500, showHidden = false } = opts
-  const absPath = resolve(targetPath)
+  const absPath = resolve(expandHome(targetPath || '~'))
 
   let parent = null
   try {
@@ -91,7 +98,7 @@ export function readDirectory(targetPath, opts = {}) {
 
 // 创建目录
 export function createDirectory(targetPath) {
-  const absPath = resolve(targetPath)
+  const absPath = resolve(expandHome(targetPath))
   try {
     mkdirSync(absPath, { recursive: true })
     return { ok: true, path: absPath }

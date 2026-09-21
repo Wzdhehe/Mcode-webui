@@ -789,7 +789,7 @@ export function attachEvents() {
     if (e.key === 'Escape') { e.stopPropagation(); wsPicker.hidden = true }
   })
 
-  // ---- 创建或打开新空间 → showDirectoryPicker (Chromium) / webkitdirectory 回退 ----
+  // ---- 创建或打开新空间 → fs-picker 模态框（后端 /api/fs/read 逐级浏览） ----
   wsCreateBtn?.addEventListener('click', async (e) => {
     e.stopPropagation()
     wsPicker.hidden = true
@@ -805,7 +805,7 @@ export function attachEvents() {
       return
     }
 
-    // showDirectoryPicker 直接返回绝对路径
+    // fs-picker 返回后端验证过的绝对路径
     submitWorkspaceChange({ dir: result.dir, syncTui: false })
   })
 

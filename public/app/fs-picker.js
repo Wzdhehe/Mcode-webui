@@ -92,7 +92,7 @@
 
       this._render();
       this._bindEvents();
-      this._load(this.currentPath);
+      // 首次目录加载由 open()/pick() 触发，避免重复请求
     }
 
     // ----------------------------------------------------------
@@ -103,6 +103,7 @@
     async open() {
       this._reset();
       this._show();
+      this._load(this.currentPath);
       return new Promise((resolve, reject) => {
         this._resolve = resolve;
         this._reject = reject;
@@ -145,7 +146,8 @@
             </div>
             <div class="fs-picker-toolbar-right">
               <button class="fs-btn" data-action="cancel">取消</button>
-              <button class="fs-btn fs-btn-primary" data-action="confirm" disabled>确定</button>
+              <button class="fs-btn" data-action="confirm" disabled>确定</button>
+              <button class="fs-btn fs-btn-primary" data-action="pick-current">选择当前目录</button>
             </div>
           </div>
 
@@ -215,6 +217,9 @@
       });
       dlg.querySelector('[data-action="confirm"]').addEventListener('click', () => {
         this._confirm();
+      });
+      dlg.querySelector('[data-action="pick-current"]').addEventListener('click', () => {
+        this._close(this.currentPath);
       });
       dlg.querySelector('[data-action="clear-filter"]').addEventListener('click', () => {
         this._filterInput.value = '';
@@ -323,13 +328,13 @@
     _confirm() {
       const paths = [...this.selectedPaths];
       if (!paths.length) return;
-      // 如果是单选目录且选中了目录本身，直接返回路径
-      const result = paths.length === 1 && paths[0].endsWith('/') ? paths[0] : paths;
-      this._close(result);
+      // 单选直接返回路径字符串，多选返回数组
+      this._close(paths.length === 1 ? paths[0] : paths);
     }
 
     _getHomeDir() {
-      return this._home || '/';
+      // 后端 /api/fs/read 支持 ~ 展开为用户主目录
+      return this._home || '~';
     }
 
     // ----------------------------------------------------------
@@ -346,9 +351,10 @@
 
       try {
         const data = await this._readDir(path);
-        this.currentPath = path;
-        this.entries = data;
-        this._pathInput.value = path;
+        // 后端返回 resolve 后的绝对路径，保证「选择当前目录」提交的是真实路径
+        this.currentPath = data.path || path;
+        this.entries = data.entries || [];
+        this._pathInput.value = this.currentPath;
         this._updateStatus();
         this._renderEntries();
       } catch (err) {
@@ -368,10 +374,10 @@
         throw new Error(`${resp.status} ${resp.statusText}${txt ? ': ' + txt : ''}`);
       }
       const json = await resp.json();
-      if (json.error) throw new Error(json.error);
+      if (json.error || json.ok === false) throw new Error(json.error || 'read failed');
       // 首次加载时从响应中获取用户目录
       if (json.home) this._home = json.home;
-      return json.data || [];
+      return json;
     }
 
     async _mkdir() {
@@ -384,7 +390,7 @@
         resp = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: parent, name: name.trim() }),
+          body: JSON.stringify({ path: joinPath(parent, name.trim()) }),
         });
       } catch (err) {
         alert('创建文件夹失败: ' + err.message);
@@ -480,10 +486,11 @@
       mtimeCol.textContent = formatMtime(entry.mtime);
       row.appendChild(mtimeCol);
 
-      // Mode
+      // Mode（后端返回八进制字符串如 "755"，解析后转 rwx 形式）
       const modeCol = document.createElement('div');
       modeCol.className = 'fs-col fs-col-mode';
-      modeCol.textContent = modeString(entry.mode);
+      const modeNum = typeof entry.mode === 'string' ? parseInt(entry.mode, 8) : entry.mode;
+      modeCol.textContent = modeString(modeNum);
       row.appendChild(modeCol);
 
       // 双击打开目录
@@ -567,8 +574,11 @@
 
     _showLoading(show) {
       this._loadingEl.style.display = show ? 'flex' : 'none';
-      this._emptyEl.style.display = 'none';
-      this._errorEl.style.display = 'none';
+      // 只在开始加载时隐藏 empty/error；加载结束（show=false）时保留错误/空态可见
+      if (show) {
+        this._emptyEl.style.display = 'none';
+        this._errorEl.style.display = 'none';
+      }
     }
 
     _showError(msg) {
@@ -591,8 +601,10 @@
     }
 
     _normPath(path) {
-      if (!path) return '/';
+      if (!path) return '~';
       path = path.trim().replace(/\\/g, '/');
+      // ~ 开头：保持原样，由后端 expandHome 展开为用户主目录
+      if (path === '~' || path.startsWith('~/')) return path;
       if (!path.startsWith('/')) {
         // 相对路径：拼到当前路径
         path = this.currentPath.replace(/\/$/, '') + '/' + path;
