@@ -2,21 +2,33 @@
 // Central HTTP request dispatcher.
 //
 // Order of gates (top-to-bottom):
-//   1. CORS headers (always)
+//   1. CORS headers — trusted-origin reflection only (v2, PR #55 review
+//      point 1); untrusted/absent Origin gets no CORS headers at all
+//   1b. Browser Origin/CSRF gate — mutating request with an untrusted
+//      Origin is 403'd BEFORE any other gate (local requests included)
 //   2. LAN reject (non-local + LAN off)
 //   3. Token auth (non-local + token enabled + token set)
 //   4. Rate limit (per-{IP,token}; /api/* minus /api/health; OPTIONS exempt)
 //   5. Read-only gate (non-local + readOnly + non-GET/OPTIONS)
 //   6. Route dispatch
 //
-// Local requests (loopback + this host's LAN_IP) bypass (2)(3)(4)(5).
+// Local requests (loopback + this host's LAN_IP) bypass (2)(3)(4)(5) —
+// but NEVER (1b): socket locality is an identity fact about the client
+// machine, not about the browser page that initiated the request, so
+// the loopback token bypass does not extend to cross-origin pages.
 // `/api/settings` is exempted from (2) so users can flip the LAN switch
 // back on from a remote device.
 
-import { isLocalRequest } from "./lib/lan.js";
+import { PORT } from "./lib/config.js";
+import {
+  isLocalRequest,
+  buildTrustedOrigins,
+  normalizeOriginHeader,
+} from "./lib/lan.js";
 import {
   getLanBroadcast,
   getReadOnly,
+  getTrustedOrigins,
   rejectLan,
 } from "./lib/settings.js";
 import { getClient, getCidFromReq } from "./lib/state-bus.js";
@@ -378,10 +390,65 @@ const ROUTES = [
 ];
 
 export async function handleRequest(req, res) {
-  // CORS headers (all paths)
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // Gate 1: CORS headers (trusted-origin reflection, v2 security fix —
+  //   PR #55 review point 1).
+  //   Was: an unconditional `Access-Control-Allow-Origin: *` on every
+  //   response. Combined with the local-request token bypass
+  //   (auth.js#isRequestAuthorized → lan.js#isLocalRequest) that let
+  //   ANY web page read API responses by simply targeting
+  //   http://127.0.0.1:<port> — the browser dialed loopback, the server
+  //   saw a "local" socket, and the wildcard let the page read the
+  //   body (incl. GET /api/settings' token-bearing share URL).
+  //   Now: only origins we actually serve — loopback/localhost (+ the
+  //   LAN address while LAN sharing is on) — plus the explicit
+  //   trustedOrigins allowlist from settings get CORS headers, and the
+  //   caller's own Origin is reflected verbatim, never a wildcard.
+  //   Untrusted origins receive NO Access-Control-* headers on ANY
+  //   response, including the OPTIONS preflight short-circuit below
+  //   (preflight and actual response stay consistent), so browsers
+  //   cannot read the body even though the request itself may execute.
+  //   Clients that send no Origin header (curl, MCP, CLI, tests) get
+  //   no CORS headers — they never needed them; zero regression.
+  const originHeader = normalizeOriginHeader(req.headers.origin);
+  const trustedOrigins = buildTrustedOrigins({
+    port: PORT,
+    lanBroadcast: getLanBroadcast(),
+    extra: getTrustedOrigins(),
+  });
+  const originTrusted = originHeader !== "" && trustedOrigins.has(originHeader);
+  // The response varies by request Origin whether or not this branch
+  // reflects — caches must key on it either way.
+  res.setHeader("Vary", "Origin");
+  if (originTrusted) {
+    res.setHeader("Access-Control-Allow-Origin", originHeader);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  }
+
+  // Gate 1b: browser Origin / CSRF boundary (v2 security fix — PR #55
+  //   review point 1, the second half of the wildcard × local-bypass
+  //   hole). Browsers attach an Origin header to non-GET requests
+  //   (same- and cross-origin alike). If one is present and is NOT in
+  //   the trusted set, the mutating request dies here with 403 —
+  //   BEFORE the token gate, and CRUCIALLY without the local-request
+  //   exemption: a malicious page targeting 127.0.0.1 arrives from a
+  //   loopback socket, is "local", would bypass the token — and is
+  //   still rejected, because its Origin is not ours. Origin-less
+  //   clients (curl / MCP / CLI) pass through unchanged.
+  if (
+    originHeader !== "" &&
+    !originTrusted &&
+    req.method !== "GET" &&
+    req.method !== "HEAD" &&
+    req.method !== "OPTIONS"
+  ) {
+    res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({
+      ok: false,
+      error: "cross-origin request rejected",
+    }));
+    return;
+  }
 
   const pathname = (req.url || "/").split("?")[0];
   const cid = getCidFromReq(req);

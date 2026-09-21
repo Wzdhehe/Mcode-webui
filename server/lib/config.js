@@ -45,8 +45,43 @@ export const MCODE_CMD = (() => {
 //   8080 是常见 HTTP alt, 也跟 web UI 语义对得上 (web = 80, 8080 = alt)
 //   仍可被 process.env.PORT 覆盖 (比如临时用 7890 跑测试)
 export const PORT = Number(process.env.PORT) || 8080;
-// v0.5.ao: web UI 默认监听所有网卡（不限制本机）— 用户在浏览器/手机/局域网访问是主场景
-export const HOST = process.env.HOST || "0.0.0.0";
+// v2 security fix (PR #55 review point 2): default bind is now loopback.
+//   v0.5.ao 默认 0.0.0.0（"浏览器/手机/局域网访问是主场景"），但本服务是
+//   高权限面（agent / filesystem / session 控制），网络可达必须是运营者
+//   显式选择而不是缺省。LAN 暴露的显式 opt-in 有两条，均继续受尊重：
+//     1. env HOST（部署/docker 既有通道，永远最优先）
+//     2. settings.json 持久化 lanBind=true（v2 新增设置项，见
+//        server/lib/settings.js；重启后生效）
+//   两者皆无 → 127.0.0.1。升级用户只要没写过显式配置就落到新默认（评审
+//   正是要求如此）；写过的零惊扰。
+export const HOST = resolveBindHost(process.env.HOST, readPersistedLanBind());
+
+// Pure resolution rule for the boot bind. Exported for tests.
+//   env HOST (trimmed, non-empty) > lanBind===true ? "0.0.0.0" : loopback
+export function resolveBindHost(envHost, lanBind) {
+  const env = typeof envHost === "string" ? envHost.trim() : "";
+  if (env) return env;
+  if (lanBind === true) return "0.0.0.0";
+  return "127.0.0.1";
+}
+
+// Best-effort read of the persisted `lanBind` flag straight from
+// settings.json. Duplicates the path resolution of settings.js#_settingsPath
+// on purpose: config.js must not import settings.js (settings.js imports
+// config.js — a cycle would pin initialization order). Fail-closed: any
+// missing/corrupt file resolves to false (loopback).
+function readPersistedLanBind() {
+  try {
+    const p =
+      process.env.MCODE_WEBUI_SETTINGS_PATH ||
+      join(homedir(), ".mcode-webui", "settings.json");
+    if (!existsSync(p)) return false;
+    const parsed = JSON.parse(readFileSync(p, "utf8"));
+    return parsed && parsed.lanBind === true;
+  } catch {
+    return false;
+  }
+}
 // v1.0.1: optional auth token for non-local requests. When set, all
 // /api/* and SSE requests must carry either `?token=<value>` or
 // `Authorization: Bearer <value>`. Local requests always bypass. See

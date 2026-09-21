@@ -7,14 +7,104 @@ import {
   statSync,
   mkdirSync,
   writeFileSync,
+  realpathSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  join,
+  resolve,
+  relative,
+  isAbsolute,
+  sep,
+  delimiter,
+} from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { DEFAULT_WORKSPACE } from "./config.js";
 import { detectTuiCwd } from "./config.js";
 import { pushStateFor } from "./state-bus.js";
 import { loadSessions } from "./sessions.js";
+
+// -----------------------------------------------------------------------
+// v2 security (upstream feat/v2-refactor): workspace containment.
+// 之前 handleWorkspaceChange / browseWorkspace 接受任意绝对路径 — 任何能过
+// 鉴权的浏览器客户端都能把工作区设到主机上任意目录（mcode 会在那里以服务
+// 进程身份跑），browse 还能枚举任意目录内容。现在引入"允许根"（allowed
+// roots）边界：
+//   1. 候选路径 resolve 后必须再经 realpathSync（解析全部软链）落在某个
+//      允许根之内才可用。
+//   2. 允许根来源 = env MCODE_WEBUI_WORKSPACE_ROOTS（系统路径分隔符分段）。
+//      设置后【完全替换】默认面；未设置时默认面 = 用户主目录 + 默认工作区
+//      + 系统 tmp 目录。
+const WORKSPACE_ROOTS_ENV = "MCODE_WEBUI_WORKSPACE_ROOTS";
+
+// 允许根列表（realpath 归一、去重、只收存在的目录）。每次调用现读 env。
+export function getAllowedWorkspaceRoots() {
+  const fromEnv = process.env[WORKSPACE_ROOTS_ENV];
+  const candidates = [];
+  if (fromEnv && fromEnv.trim()) {
+    for (const p of fromEnv.split(delimiter)) {
+      const t = p.trim();
+      if (t) candidates.push(resolve(t));
+    }
+  } else {
+    candidates.push(homedir(), DEFAULT_WORKSPACE, tmpdir());
+  }
+  const roots = [];
+  for (const c of candidates) {
+    let real;
+    try {
+      real = realpathSync(c);
+      if (!statSync(real).isDirectory()) continue;
+    } catch {
+      continue; // 不存在/不可解析的根直接跳过，不 fatal
+    }
+    if (!roots.includes(real)) roots.push(real);
+  }
+  return roots;
+}
+
+// dir 是否位于 root 内（含 root 本身）。用 relative() 而非字符串前缀。
+function isWithinRoot(root, dir) {
+  const rel = relative(root, dir);
+  return (
+    rel === "" ||
+    (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  );
+}
+
+function containmentError(absDir, realDir, roots) {
+  const via = realDir === absDir ? "" : `（软链解析后为 ${realDir}）`;
+  const rootsDesc = roots.length
+    ? roots.join(" , ")
+    : `（空 — 检查 ${WORKSPACE_ROOTS_ENV} 是否全部指向存在的目录）`;
+  return (
+    `工作区越界: ${absDir}${via} 不在任何允许根内。` +
+    `允许根: ${rootsDesc}。` +
+    `如需扩展请设置 ${WORKSPACE_ROOTS_ENV} 环境变量` +
+    `（多个根用系统路径分隔符分段；设置后完全替换默认允许根）。`
+  );
+}
+
+// 校验 absDir：realpath 解析全部软链后必须落在允许根内。
+function resolveWithinRoots(absDir) {
+  const roots = getAllowedWorkspaceRoots();
+  let real;
+  try {
+    real = realpathSync(absDir);
+  } catch (e) {
+    return {
+      ok: false,
+      roots,
+      error: `无法解析路径 ${absDir}: ${e.message}`,
+    };
+  }
+  for (const r of roots) {
+    if (isWithinRoot(r, real)) return { ok: true, real, roots };
+  }
+  return { ok: false, roots, error: containmentError(absDir, real, roots) };
+}
 
 // v0.5.al: per-cid 切换 workspace
 // body: {dir, syncTui?, saveRecent?}
@@ -49,7 +139,11 @@ export function handleWorkspaceChange(cs, cid, payload) {
     return { ok: false, error: `目录不存在: ${target}` };
   }
   const absDir = resolve(target);
-  // 写到 cs
+  // v2 security: containment 校验（realpath 解软链后必须在允许根内）。
+  // useTui/reset 的目标同样过闸 — 越界时给可行动错误而非静默放行。
+  const contained = resolveWithinRoots(absDir);
+  if (!contained.ok) return { ok: false, error: contained.error };
+  // 写到 cs（保持 resolve() 形；containment 已由 realpath 校验通过）
   cs.workspace = { dir: absDir, branch: null, tree: null };
   // 可选：同步 mcode TUI（写 cwd.json，下次 TUI 启动会看到新 cwd）
   if (payload.syncTui) {
@@ -413,83 +507,75 @@ async function tryKdialog(signal) {
 // v0.5.am: 列出目录下的子目录（仅目录，懒加载给前端树用）
 // query: ?path=<absolute> 或 "~/xxx"（v1.2 起支持 ~ 展开）
 //   (省略时返回根盘符 / 根目录，响应同时带 home/platform/tmpDir 供前端定位)
+// query: ?path=<absolute> 或 "~/xxx"（v1.2 起支持 ~ 展开）
+//   (省略时返回允许根列表，响应同时带 home/platform/tmpDir 供前端定位)
+// v2 security: 目录枚举与工作区同边界 — 只有落在允许根内的目录才可枚举；
+//   省略 path 时的根视图只暴露允许根本身。响应形状保持兼容：POSIX 仍
+//   dir:"/"，Windows 仍 dir:null + roots 数组。
 export function browseWorkspace(rawPath) {
   const MAX = 500; // 单层最多返回 500 个子目录，避免 huge dirs 把前端卡死
   let target,
     parent,
     roots = null;
   if (!rawPath) {
-    // 没传 path → 返回根盘符（Windows: C:\ D:\ 等；其他: /）
-    if (process.platform === "win32") {
-      const found = [];
-      for (let c = 65; c <= 90; c++) {
-        const letter = String.fromCharCode(c) + ":\\";
-        try {
-          if (existsSync(letter) && statSync(letter).isDirectory())
-            found.push(letter);
-        } catch {}
-      }
-      if (found.length === 0) found.push("C:\\");
-      roots = found;
-      target = null;
+    // 没传 path → 根视图 = 允许根（前端把它渲染为顶层节点）
+    roots = getAllowedWorkspaceRoots();
+    target = process.platform === "win32" ? null : "/";
+    if (target) {
+      const parentPath = dirname(target);
+      parent = parentPath === target ? null : parentPath;
     } else {
-      target = "/";
+      parent = null;
     }
-  } else {
-    target = resolve(expandTilde(rawPath));
-    if (!existsSync(target) || !statSync(target).isDirectory()) {
-      return { ok: false, error: `目录不存在: ${rawPath}` };
-    }
-    const parentPath = dirname(target);
-    parent = parentPath === target ? null : parentPath;
+    return { ok: true, dir: target, parent, roots, children: [] };
+  }
+  target = resolve(expandTilde(rawPath));
+  if (!existsSync(target) || !statSync(target).isDirectory()) {
+    return { ok: false, error: `目录不存在: ${rawPath}` };
+  }
+  // v2 security: 枚举前 containment 校验（realpath 解软链后必须在允许根内）
+  const contained = resolveWithinRoots(target);
+  if (!contained.ok) return { ok: false, error: contained.error };
+  const parentPath = dirname(target);
+  parent = parentPath === target ? null : parentPath;
+  if (parent !== null && !resolveWithinRoots(parent).ok) {
+    // 上级已在允许根外 → 导航到顶（前端 up 按钮不再引导越界请求）
+    parent = null;
   }
   const children = [];
-  if (target) {
-    let entries;
-    try {
-      entries = readdirSync(target, { withFileTypes: true });
-    } catch (e) {
-      return { ok: false, error: `无法读取: ${e.message}` };
-    }
-    const dirs = [];
-    let skipped = 0;
-    for (const ent of entries) {
-      if (dirs.length >= MAX) {
-        skipped++;
-        continue;
-      }
-      try {
-        if (ent.isDirectory()) {
-          dirs.push({ name: ent.name, path: join(target, ent.name) });
-        }
-      } catch {
-        skipped++;
-      }
-    }
-    dirs.sort((a, b) => a.name.localeCompare(b.name, "zh-Hans"));
-    children.push(...dirs);
-    return {
-      ok: true,
-      dir: target,
-      parent,
-      children,
-      skipped,
-      total: dirs.length,
-      // v1.2: 前端降级树初始定位 / 「无需工作空间」按钮用
-      home: homedir(),
-      tmpDir: tmpdir(),
-      platform: process.platform,
-    };
-  } else {
-    return {
-      ok: true,
-      dir: null,
-      parent: null,
-      roots,
-      children: [],
-      home: homedir(),
-      tmpDir: tmpdir(),
-      platform: process.platform,
-    };
+  let entries;
+  try {
+    entries = readdirSync(target, { withFileTypes: true });
+  } catch (e) {
+    return { ok: false, error: `无法读取: ${e.message}` };
   }
+  const dirs = [];
+  let skipped = 0;
+  for (const ent of entries) {
+    if (dirs.length >= MAX) {
+      skipped++;
+      continue;
+    }
+    try {
+      if (ent.isDirectory()) {
+        dirs.push({ name: ent.name, path: join(target, ent.name) });
+      }
+    } catch {
+      skipped++;
+    }
+  }
+  dirs.sort((a, b) => a.name.localeCompare(b.name, "zh-Hans"));
+  children.push(...dirs);
+  return {
+    ok: true,
+    dir: target,
+    parent,
+    children,
+    skipped,
+    total: dirs.length,
+    // v1.2: 前端降级树初始定位 / 「无需工作空间」按钮用
+    home: homedir(),
+    tmpDir: tmpdir(),
+    platform: process.platform,
+  };
 }

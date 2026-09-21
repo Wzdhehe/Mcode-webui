@@ -15,7 +15,7 @@
 // `MCODE_WEBUI_HOME` env var (a test-only override) so we never touch the
 // real user settings file.
 
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe, beforeEach, afterEach, after } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,6 +23,38 @@ import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from "no
 import { tmpdir } from "node:os";
 
 const absPath = (rel) => pathToFileURL(join(import.meta.dirname, "..", "server", rel)).href;
+
+// Isolate BOTH on-disk surfaces this suite can touch:
+//
+//   1. The AUDIT event stream (B01 write-ahead events). Every setter in
+//      settings.js (setLanBroadcast / setReadOnly / rotateToken / ...)
+//      appends via lib/events.js, whose _eventsPath() lazily resolves
+//      MCODE_WEBUI_EVENTS_PATH — without this the suite wrote to the
+//      REAL ~/.mcode-webui/events.ndjson: green wherever that dir
+//      exists (while silently polluting the operator's audit chain),
+//      ENOENT-crashed where it doesn't (siinfer/Linux gate: "rename
+//      .../.mcode-webui/events.ndjson.tmp -> .../events.ndjson").
+//   2. settings.json itself. Only the persistence describe below set
+//      MCODE_WEBUI_SETTINGS_PATH, but persisting setters that run
+//      OUTSIDE it (rotateToken / setTokenAcknowledged in the token
+//      describes) wrote the operator's real settings.json. File-scope
+//      default closes that; the persistence describe's own
+//      beforeEach/afterEach still override-and-restore on top.
+//
+// Both resolvers are lazy env reads, so a module-scope assignment
+// covers every write regardless of import order.
+const _isoTmpDir = mkdtempSync(join(tmpdir(), "mcode-webui-libsettings-iso-"));
+const _origEventsPath = process.env.MCODE_WEBUI_EVENTS_PATH;
+const _origSettingsPath = process.env.MCODE_WEBUI_SETTINGS_PATH;
+process.env.MCODE_WEBUI_EVENTS_PATH = join(_isoTmpDir, "events.ndjson");
+process.env.MCODE_WEBUI_SETTINGS_PATH = join(_isoTmpDir, "settings.json");
+after(async () => {
+  if (_origEventsPath === undefined) delete process.env.MCODE_WEBUI_EVENTS_PATH;
+  else process.env.MCODE_WEBUI_EVENTS_PATH = _origEventsPath;
+  if (_origSettingsPath === undefined) delete process.env.MCODE_WEBUI_SETTINGS_PATH;
+  else process.env.MCODE_WEBUI_SETTINGS_PATH = _origSettingsPath;
+  try { rmSync(_isoTmpDir, { recursive: true, force: true }); } catch {}
+});
 
 const settings = await import(absPath("lib/settings.js"));
 

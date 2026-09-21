@@ -21,7 +21,7 @@
   "extensions": {
     "displayName": "mcode Web UI",
     "icon": "🌐",
-    "securityNotes": "See references/SECURITY-NOTES.md — canonical disclosure (network bind 0.0.0.0, ?token= query, mavis sqlite cross-delete, file upload, no telemetry). Per red-line 7 of mcode-plugin-guide, this is the single source of truth.",
+    "securityNotes": "See references/SECURITY-NOTES.md — canonical disclosure (loopback bind default with explicit LAN opt-in, trusted-origin CORS, ?token= query, mavis sqlite cross-delete, bounded file upload, workspace containment, no telemetry). Per red-line 7 of mcode-plugin-guide, this is the single source of truth.",
     "runtime": {
       "minNodeVersion": "22.19",
       "maxNodeVersion": "26",
@@ -42,9 +42,9 @@
       },
       "HOST": {
         "type": "string",
-        "default": "0.0.0.0",
+        "default": "127.0.0.1",
         "env": "HOST",
-        "description": "HTTP bind address (loopback-only or all interfaces)"
+        "description": "HTTP bind address. Default is loopback 127.0.0.1; LAN exposure is explicit opt-in — set HOST (e.g. 0.0.0.0) or the persisted lanBind setting (POST /api/settings {lanBind: true}, restart-effective)"
       },
       "TOKEN": {
         "type": "string",
@@ -69,6 +69,30 @@
         "default": "auto-detect",
         "env": "MCODE_WEBUI_UPLOAD_DIR",
         "description": "Directory for uploaded attachments"
+      },
+      "MCODE_WEBUI_UPLOAD_MAX_REQUEST": {
+        "type": "number",
+        "default": 52428800,
+        "env": "MCODE_WEBUI_UPLOAD_MAX_REQUEST",
+        "description": "Max total upload request body in bytes (default 50 MiB, positive integer; over-limit requests get 413)"
+      },
+      "MCODE_WEBUI_UPLOAD_MAX_FILE": {
+        "type": "number",
+        "default": 26214400,
+        "env": "MCODE_WEBUI_UPLOAD_MAX_FILE",
+        "description": "Max single uploaded file in bytes (default 25 MiB, positive integer; over-limit requests get 413)"
+      },
+      "MCODE_WEBUI_UPLOAD_QUOTA": {
+        "type": "number",
+        "default": 209715200,
+        "env": "MCODE_WEBUI_UPLOAD_QUOTA",
+        "description": "Total size cap for the upload directory in bytes (default 200 MiB, positive integer; over-limit requests get 413)"
+      },
+      "MCODE_WEBUI_WORKSPACE_ROOTS": {
+        "type": "string",
+        "default": "",
+        "env": "MCODE_WEBUI_WORKSPACE_ROOTS",
+        "description": "Allowed roots for workspace containment, separated by the platform path separator (: on POSIX, ; on Windows). Unset = default set (user home + default workspace + system tmp). Setting it fully replaces the default set"
       },
       "DEBUG_INJECT": {
         "type": "string",
@@ -120,7 +144,7 @@
       },
       {
         "name": "lan-sharing",
-        "description": "Default binds `0.0.0.0:8080` so any device on the LAN can open the webui. A runtime toggle (`POST /api/settings {lanBroadcast: false}`) closes the LAN gate with a bilingual 403 page. Override `HOST` to `127.0.0.1` for loopback-only."
+        "description": "Binds loopback `127.0.0.1:8080` by default; LAN exposure is an explicit opt-in — the `HOST` env var or the persisted `lanBind` setting (`POST /api/settings {lanBind: true}`, effective on restart). A runtime toggle (`POST /api/settings {lanBroadcast: false}`) additionally closes the LAN gate with a bilingual 403 page. The settings snapshot discloses the live exposure via `lanExposed` / `bindRestartPending` / `lanExposureNotice`."
       },
       {
         "name": "token-auth",

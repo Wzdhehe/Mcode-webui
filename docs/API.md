@@ -207,9 +207,50 @@ Delete mcode sessions that no webui session references. Two scopes:
 ### `DELETE /api/sessions/:id`
 
 Delete a webui session AND its linked mcode session (if any). The mcode
-deletion is a transaction across 8 sqlite tables.
+deletion is a single SQLite transaction across the 32 session-keyed
+`local_runtime_*` tables (plus `local_runtime_sessions`) — any
+non-absent per-table error rolls the whole transaction back.
 
-**Response 200** `{ok: true}`
+Pass `?dryRun=true` to preview the mcode-side impact without modifying
+anything.
+
+**Response 200** (main path)
+```json
+{
+  "ok": true,
+  "deleted": "uuid",
+  "matchKind": "webuiId",
+  "dryRun": false,
+  "remaining": 11,
+  "mcodeDbDel": {
+    "ok": true,
+    "outcome": "deleted",
+    "log": ["local_runtime_sessions:1", "local_runtime_message_rows:42", "…"],
+    "totalRowsDeleted": 57,
+    "tablesAbsent": 0
+  }
+}
+```
+
+**`mcodeDbDel.outcome` — explicit verdicts (no fake success)**:
+
+| outcome / reason | Meaning |
+|---|---|
+| `deleted` | Transaction committed; rows were removed. |
+| `already_absent` | Transaction committed; nothing matched for this sid (tables individually missing are skipped only when the schema catalog confirms the absence). |
+| `unsupported_schema` (`ok:false`, `reason`) | A table exists but has no `session_id` key column; rolled back, `table` names it. |
+| `db_error` (`ok:false`, `reason`) | Lock conflict (`SQLITE_BUSY`/`LOCKED`), prepare/run failure, or IO error; rolled back. |
+| `audit_write_failed` (`ok:false`, `reason`) | Rows may be gone but the audit event could not be recorded — surfaced, never a clean success. |
+
+The `session.delete` audit event carries the `outcome`
+(`tablesAffected` / `tablesAbsent` / `totalRowsDeleted`). On the orphan
+path (`mvs_*` id with no webui session), a failed mcode delete answers
+**500** with the same `mcodeDbDel` failure object embedded; on the main
+path the 200 body's `mcodeDbDel.ok` / `outcome` fields are the source
+of truth for the mcode-side result.
+
+**Response 404** `{"ok": false, "error": "session not found"}` — id
+matches neither a webui session nor an `mvs_*` pattern.
 
 ### `GET /api/acp-sessions`
 
@@ -266,9 +307,21 @@ or `/` for Linux)
 }
 ```
 
-When `path` is omitted:
-- Windows: `roots: ["C:", "D:", …]`
-- Linux: `children: [{name: "/", path: "/", isDir: true}]`
+When `path` is omitted, the root view lists only the **allowed roots**
+(🔒 v2 — see below); the response keeps its platform-compatible shape:
+- Windows: `roots: ["C:\\Users\\you", …]` (the allowed roots), `dir: null`
+- POSIX: `dir: "/"`, `roots: ["/home/you", "/tmp", …]`, `children: []`
+
+**🔒 v2 workspace containment (PR #55 review point 5)**: a candidate
+path is `resolve()`d and symlink-resolved (`realpath`), and must land
+within an allowed root — default allowed roots are the user's home
+directory + the default workspace + the system tmp directory. The
+`MCODE_WEBUI_WORKSPACE_ROOTS` env var (path-separator-separated
+segments) **fully replaces** the default set. Out-of-root paths —
+including `../` traversal and symlink escapes — are rejected with an
+actionable error naming the resolved path, the allowed roots, and the
+env knob. Both this endpoint and `POST /api/workspace` enforce the same
+boundary.
 
 ### `GET /api/workspace/recent?search=&limit=`
 
@@ -317,17 +370,23 @@ the LAN guard** — it's how a remote user toggles LAN back on after
 locking themselves out. The same snapshot is also pushed via SSE on
 state changes (see [ARCHITECTURE.md §5 SSE state push](./ARCHITECTURE.md#5-sse-state-push)).
 
-**Response 200** (v1.0.1, fields added in v1.0.1 marked with 🆕)
+**Response 200** (🆕 v1.0.1, 🔒 v2 security — PR #55 review)
 ```json
 {
   "ok": true,
   "lanBroadcast": true,
   "port": 8080,
-  "host": "0.0.0.0",
+  "host": "127.0.0.1",
   "lanIp": "192.168.1.50",
   "lanUrl": "http://192.168.1.50:8080",
-  "lanUrlWithToken": "http://192.168.1.50:8080/?token=…",  // 🆕 v1.0.1 — full URL with token, for clipboard sharing
+  "lanUrlWithToken": "http://192.168.1.50:8080/?token=…",  // 🔒 v2 — FIRST-RUN BOOTSTRAP ONLY: present while tokenAcknowledged=false, omitted entirely after ack (UI falls back to lanUrl); re-issued once per rotation
   "localUrl": "http://127.0.0.1:8080",
+  "lanBind": false,                // 🔒 v2 — persisted LAN-bind opt-in; true binds 0.0.0.0 on next boot (env HOST still wins)
+  "bindHost": "127.0.0.1",         // 🔒 v2 — what the NEXT boot resolves to (env HOST > lanBind > loopback)
+  "lanExposed": false,             // 🔒 v2 — effective bind is not loopback
+  "bindRestartPending": false,     // 🔒 v2 — setting no longer matches the live socket; never true when env HOST owns the bind
+  "lanExposureNotice": "",         // 🔒 v2 — bilingual exposure disclosure (non-empty when exposed / pending)
+  "trustedOrigins": [],            // 🔒 v2 — explicit cross-origin allowlist for CORS reflection (see below)
   "mcodeCmd": "C:\\…\\mcode.cmd",
   "mcodeVersion": "0.1.2",
   "defaultWorkspace": "C:\\…",
@@ -338,13 +397,24 @@ state changes (see [ARCHITECTURE.md §5 SSE state push](./ARCHITECTURE.md#5-sse-
   "tokenAcknowledged": false,       // 🆕 v1.0.1 — operator has confirmed they saved the token
   "tokenRotatedAt": 1724259600000   // 🆕 v1.0.1 — ms-since-epoch of the last rotation
 }
-}
 ```
+
+Notes on the 🔒 v2 fields:
+
+- `host` stays the **actual boot-time bind**; `bindHost` recomputes
+  what the next boot would resolve to from current state
+  (`resolveBindHost`: env `HOST` > `lanBind` > `127.0.0.1`).
+- `trustedOrigins` is the explicit CORS allowlist — origins listed here
+  are reflected verbatim in `Access-Control-Allow-Origin` in addition
+  to the server's own serving origins (loopback + LAN address while
+  LAN sharing is on). See
+  [SECURITY-NOTES CORS](../references/SECURITY-NOTES.md#cors--cross-origin-resource-sharing).
 
 Fields `currentToken` and `tokenAcknowledged` are persisted to
 `~/.mcode-webui/settings.json` (mode `0600` on Unix). `currentToken`
-is **omitted after `tokenAcknowledged=true`** — the server only ships
-the token while the operator still has a copy of it in the UI.
+and `lanUrlWithToken` are **omitted after `tokenAcknowledged=true`** —
+the server only ships the token while the operator still has a copy of
+it in the UI.
 `MCODE_WEBUI_SETTINGS_PATH` env overrides the file location.
 
 ### `POST /api/settings`
@@ -354,10 +424,12 @@ combination of the fields below is settable in one request.
 **Always exempt from the LAN guard AND the read-only gate** (so the
 admin can always toggle things remotely, even in read-only mode).
 
-**v1.0.1 request — all settable fields**
+**v2 request — all settable fields** (🆕 v1.0.1, 🔒 v2 security — PR #55 review)
 ```json
 {
   "lanBroadcast": true,            // (existing) LAN on/off
+  "lanBind": true,                 // 🔒 v2 — persisted LAN-bind opt-in; binds 0.0.0.0 on next boot (restart-effective)
+  "trustedOrigins": ["https://webui.example.com"],  // 🔒 v2 — explicit CORS allowlist; replaces the stored list wholesale
   "readOnly": true,                // 🆕 v1.0.1 — toggle read-only mode
   "tokenEnabled": false,           // 🆕 v1.0.1 — toggle token auth master switch
   "resetToken": true,              // 🆕 v1.0.1 — generate new token + broadcast auth.token_rotated SSE
@@ -365,11 +437,18 @@ admin can always toggle things remotely, even in read-only mode).
 }
 ```
 
+`trustedOrigins` validation (fail-closed, whole batch): `http`/`https`
+origin serialization only (`scheme://host[:port]` — no path / query /
+userinfo), at most 16 entries of 1..200 chars each; an invalid batch is
+rejected **400 before any state changes** (a malformed allowlist can
+never partially widen the CORS surface).
+
 **Responses**
 
 - `200 {"ok":true, "changed":true, …}` — at least one field was updated
 - `200 {"ok":true, "tokenRotated":true, "currentToken":"…", "tokenAcknowledged":false, "tokenRotatedAt":…}` — special response for `resetToken:true` (returns the new value so the caller can update its localStorage)
 - `200 {"ok":true, "changed":false}` — no field actually changed
+- `400 {"ok":false, "error":"invalid origin: …"}` (and similar) — `trustedOrigins` batch failed validation
 - `500 {"ok":false, "error":"…"}` — only on `rotateToken` disk write failure (rare)
 
 ---
@@ -379,7 +458,15 @@ admin can always toggle things remotely, even in read-only mode).
 ### `POST /api/upload`
 
 Multipart file upload. Saves to `MCODE_WEBUI_UPLOAD_DIR` and returns
-the absolute path.
+the absolute path. 🔒 v2 security (PR #55 review point 3): the parser
+is a bounded streaming state machine (memory O(chunk), never O(body)),
+with three limits enforced mid-stream:
+
+| Limit | Default | Env override (positive integer) | Error code |
+|---|---|---|---|
+| Total request body | 50 MiB | `MCODE_WEBUI_UPLOAD_MAX_REQUEST` | `UPLOAD_REQ_TOO_LARGE` |
+| Single file | 25 MiB | `MCODE_WEBUI_UPLOAD_MAX_FILE` | `UPLOAD_FILE_TOO_LARGE` |
+| Upload-directory quota | 200 MiB | `MCODE_WEBUI_UPLOAD_QUOTA` | `UPLOAD_QUOTA_EXCEEDED` |
 
 **Request** `multipart/form-data` with a `file` field.
 
@@ -387,12 +474,29 @@ the absolute path.
 ```json
 {
   "ok": true,
-  "filename": "screenshot.png",
   "path": "C:\\…\\.webui-uploads\\screenshot.png",
-  "size": 12345,
-  "mime": "image/png"
+  "name": "screenshot.png",
+  "size": 12345
 }
 ```
+
+(`size` is the stored byte count; the file lands at its final name only
+via `rename()` after a clean stream end — failures leave no
+half-written artifact.)
+
+**Errors** — status is mapped from the error code, and the code is
+echoed in the body so the client sees WHICH limit fired:
+
+```json
+{ "ok": false, "error": "file exceeds size limit: 26214401 > 26214400 bytes (adjust MCODE_WEBUI_UPLOAD_MAX_FILE to allow more)", "code": "UPLOAD_FILE_TOO_LARGE" }
+```
+
+- `413` + `Connection: close` — `UPLOAD_REQ_TOO_LARGE` /
+  `UPLOAD_FILE_TOO_LARGE` / `UPLOAD_QUOTA_EXCEEDED` (the over-limit
+  body was deliberately not consumed)
+- `400` — `UPLOAD_MALFORMED` (malformed / truncated multipart) /
+  `UPLOAD_ABORTED` (client tore the stream)
+- `500` — anything else (disk I/O, audit write, unknown)
 
 ---
 
@@ -628,4 +732,4 @@ All errors follow one of these shapes:
 { "ok": false, "error": "LAN 访问已关闭。在本机打开设置开启。" }
 ```
 
-The HTTP status is appropriate to the cause (400 / 401 / 403 / 404 / 409 / 500 / 501).
+The HTTP status is appropriate to the cause (400 / 401 / 403 / 404 / 409 / 413 / 500 / 501).

@@ -131,7 +131,7 @@ async function stopServer(proc, tmpDir) {
 //     event-loop handles) keeping the test alive. Before this, a server-side
 //     hang (acp.mjs pending never settling when mcode is absent on Linux)
 //     turned into a permanent 60s suite hang instead of a fast failure.
-function httpRequest({ method = "GET", host = "127.0.0.1", port, path, timeoutMs = 10000 }) {
+function httpRequest({ method = "GET", host = "127.0.0.1", port, path, headers = {}, timeoutMs = 10000 }) {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
             req.destroy();
@@ -140,7 +140,7 @@ function httpRequest({ method = "GET", host = "127.0.0.1", port, path, timeoutMs
             ));
         }, timeoutMs);
         const req = http.request(
-            { method, host, port, path, headers: { Connection: "close" } },
+            { method, host, port, path, headers: { Connection: "close", ...headers } },
             (res) => {
                 const chunks = [];
                 res.on("data", (c) => chunks.push(c));
@@ -389,11 +389,14 @@ test("router-boot: GET /api/state.missing returns 404 (no static + no api route)
 });
 
 // -----------------------------------------------------------------------
-// OPTIONS preflight — exercises CORS gate (router.js line 318-323 +
-// line 78-87 short-circuit). Every route accepts OPTIONS; the response
-// is 204 with CORS headers, BEFORE any auth gate fires.
+// OPTIONS preflight — exercises the CORS gate (router.js OPTIONS
+// short-circuit). v2 trusted-origin policy (PR #55 review point 1):
+// no Origin (curl-shaped) → 204 with NO CORS headers; trusted Origin →
+// 204 with the origin reflected; untrusted Origin → 204 with NO CORS
+// headers (preflight consistent with the actual response, so the
+// browser blocks the follow-up request).
 // -----------------------------------------------------------------------
-test("router-boot: OPTIONS * returns 204 with CORS headers (preflight bypass)", async () => {
+test("router-boot: OPTIONS without Origin returns 204 and no CORS headers (non-browser clients)", async () => {
     const res = await httpRequest({
         method: "OPTIONS",
         port: server.port,
@@ -401,22 +404,80 @@ test("router-boot: OPTIONS * returns 204 with CORS headers (preflight bypass)", 
     });
     assert.equal(res.status, 204, `expected 204, got ${res.status}`);
     assert.equal(
+        res.headers["access-control-allow-origin"],
+        undefined,
+        "no Origin header → no Access-Control-Allow-Origin (CORS headers are meaningless for non-browser clients)",
+    );
+});
+
+test("router-boot: OPTIONS with the server's own Origin returns 204 + reflected ACAO", async () => {
+    const res = await httpRequest({
+        method: "OPTIONS",
+        port: server.port,
+        path: "/api/state",
+        headers: { Origin: `http://127.0.0.1:${server.port}` },
+    });
+    assert.equal(res.status, 204, `expected 204, got ${res.status}`);
+    assert.equal(
         String(res.headers["access-control-allow-origin"] || ""),
-        "*",
-        "CORS Allow-Origin: *",
+        `http://127.0.0.1:${server.port}`,
+        "trusted origin must be reflected verbatim, never a wildcard",
+    );
+});
+
+test("router-boot: OPTIONS with an untrusted Origin returns 204 and NO CORS headers", async () => {
+    const res = await httpRequest({
+        method: "OPTIONS",
+        port: server.port,
+        path: "/api/state",
+        headers: { Origin: "http://evil.example" },
+    });
+    assert.equal(res.status, 204, `expected 204, got ${res.status}`);
+    assert.equal(
+        res.headers["access-control-allow-origin"],
+        undefined,
+        "untrusted origin must get zero Access-Control-* headers on preflight (consistent with actual responses)",
     );
 });
 
 // -----------------------------------------------------------------------
-// CORS headers on a regular response — confirms the gate-1 CORS step
-// fires for non-OPTIONS requests too.
+// CORS headers on a regular response — v2: Origin-less requests carry
+// no CORS headers (gate 1 only reflects for a present, trusted Origin).
 // -----------------------------------------------------------------------
-test("router-boot: regular response carries CORS headers (gate 1)", async () => {
+test("router-boot: response without Origin carries no CORS headers (gate 1)", async () => {
     const res = await httpRequest({ port: server.port, path: "/api/health" });
     assert.equal(res.status, 200);
     assert.equal(
+        res.headers["access-control-allow-origin"],
+        undefined,
+        "no Origin header → no Access-Control-Allow-Origin on the actual response",
+    );
+});
+
+test("router-boot: GET with trusted Origin gets the origin reflected (readable)", async () => {
+    const res = await httpRequest({
+        port: server.port,
+        path: "/api/health",
+        headers: { Origin: `http://localhost:${server.port}` },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(
         String(res.headers["access-control-allow-origin"] || ""),
-        "*",
-        "Allow-Origin: * on JSON response",
+        `http://localhost:${server.port}`,
+        "own serving origin is trusted and reflected verbatim",
+    );
+});
+
+test("router-boot: GET with untrusted Origin gets NO CORS headers (body unreadable by the page)", async () => {
+    const res = await httpRequest({
+        port: server.port,
+        path: "/api/health",
+        headers: { Origin: "http://evil.example" },
+    });
+    assert.equal(res.status, 200, "the GET itself still executes — only the read is denied");
+    assert.equal(
+        res.headers["access-control-allow-origin"],
+        undefined,
+        "untrusted origin must not be able to read the response body",
     );
 });

@@ -90,7 +90,7 @@ external registries / IDE integrations match on these strings.
 | `file-attachments` | Drag-drop / click / paste upload + `@path` injection |
 | `quota-usage` | `mmx quota show` + per-turn context window display |
 | `bilingual-ui` | zh-CN / en locale toggle via `t(key)` lookup tables |
-| `lan-sharing` | Default `0.0.0.0` bind with runtime on/off toggle |
+| `lan-sharing` | Loopback default; LAN exposure via explicit opt-in (`HOST` env / `lanBind` setting) + runtime on/off toggle |
 | `token-auth` | `?token=` / `Authorization: Bearer` for non-local requests |
 | `mobile-responsive` | Drawer at <900px, single column at <600px |
 
@@ -108,9 +108,13 @@ list. Most relevant:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `PORT` | `8080` | HTTP listen port (default was `7890` before v0.5) |
-| `HOST` | `0.0.0.0` | Bind address (override to `127.0.0.1` for loopback-only) |
+| `HOST` | `127.0.0.1` | Bind address. **v2 (PR #55)**: default is loopback; LAN exposure is an explicit opt-in — set `HOST` (e.g. `0.0.0.0`) or the persisted `lanBind` setting (`POST /api/settings {lanBind: true}`, effective on restart). |
 | `TOKEN` | (empty) | Required token for non-local requests. **v1.0.1**: if unset, server auto-generates a 32-hex token on first start (see "Token auth" below). |
 | `MCODE_WEBUI_SETTINGS_PATH` | `~/.mcode-webui/settings.json` | **v1.0.1**: override the settings file location (tests, non-default installs). |
+| `MCODE_WEBUI_UPLOAD_MAX_REQUEST` | `52428800` (50 MiB) | **v2 (PR #55)**: max total upload request body in bytes (positive integer; over-limit → 413). |
+| `MCODE_WEBUI_UPLOAD_MAX_FILE` | `26214400` (25 MiB) | **v2 (PR #55)**: max single uploaded file in bytes (positive integer; over-limit → 413). |
+| `MCODE_WEBUI_UPLOAD_QUOTA` | `209715200` (200 MiB) | **v2 (PR #55)**: total size cap for the upload directory in bytes (positive integer; over-limit → 413). |
+| `MCODE_WEBUI_WORKSPACE_ROOTS` | (unset) | **v2 (PR #55)**: allowed roots for workspace containment, segments split on the platform path separator (`:` POSIX / `;` Windows). Unset = default set (user home + default workspace + system tmp); **setting it fully replaces the default set**. |
 
 ## Token auth (v1.0.1)
 
@@ -172,8 +176,11 @@ acknowledged flag survives server restarts.
 Full disclosure is in
 [`references/SECURITY-NOTES.md`](references/SECURITY-NOTES.md). Key points:
 
-- Default binds `0.0.0.0` — reachable from any device on the LAN. Use
-  `HOST=127.0.0.1` for loopback-only mode.
+- Default binds `127.0.0.1` (loopback). LAN exposure is an explicit
+  opt-in: the `HOST` env var or the `lanBind` setting (restart-effective),
+  disclosed live via `lanExposed` / `bindRestartPending` in the settings
+  snapshot. CORS reflects trusted origins only — see the CORS section
+  there for the `trustedOrigins` allowlist and the Origin/CSRF gate.
 - `?token=` query string is supported for browser convenience. Prefer
   `Authorization: Bearer` header for any non-browser caller.
 - `DELETE /api/sessions/:id` writes to the user's real mavis sqlite

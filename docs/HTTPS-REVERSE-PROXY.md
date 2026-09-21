@@ -23,12 +23,13 @@
 | Capability | Status | Why |
 |---|---|---|
 | Built-in HTTPS server | ❌ | Node's `https.createServer` needs cert + key files; ops would have to be re-implemented for cert rotation, SNI, OCSP stapling, ALPN. The Node stdlib also lacks ACME. We deliberately don't ship a TLS stack. |
-| Reverse-proxy-friendly | ✅ | The webui binds to `HOST=0.0.0.0` and serves the full HTTP API on `PORT` (default 8080). nginx / caddy / Traefik in front is the recommended deployment shape. |
+| Reverse-proxy-friendly | ✅ | The webui serves the full HTTP API on `PORT` (default 8080). 🔒 v2 (PR #55 review point 2): the default bind is now loopback `127.0.0.1` — for a same-host proxy that is exactly right (proxy → `127.0.0.1:8080`). If the proxy lives on another host, opt into a wider bind explicitly: `HOST=0.0.0.0` env or the persisted `lanBind` setting (`POST /api/settings {lanBind: true}`). nginx / caddy / Traefik in front is the recommended deployment shape. |
 | mTLS (client certs) | ❌ | Same as HTTPS — not in scope; configure mTLS at the proxy layer. |
 | Rate limiting | ✅ | Per-`{IP,token}` fixed-window limiter (see [`server/lib/rate-limit.js`](../server/lib/rate-limit.js)). Token holders get 2x. Loopback bypasses entirely. |
 
 **When you don't need a proxy.** The webui is also designed to run local-only:
-`HOST=127.0.0.1` + `MCODE_WEBUI_RATE_LIMIT` defaults are safe on loopback.
+`HOST=127.0.0.1` (the v2 default) + `MCODE_WEBUI_RATE_LIMIT` defaults
+are safe on loopback.
 
 ## 2. How the webui and the proxy share auth
 
@@ -48,6 +49,53 @@ The webui accepts two token carriers (see [`server/lib/auth.js`](../server/lib/a
 - strip the `token=` query param at the proxy (`proxy_set_header Authorization "Bearer $arg_token"`), OR
 - set `access_log off` for the SSE / API location.
 
+### 2.1 Browser origins behind a proxy — the `trustedOrigins` allowlist (v2)
+
+🔒 v2 (PR #55 review point 1) replaced the old wildcard CORS with
+**trusted-origin reflection**, and added a browser **Origin/CSRF gate**:
+any mutating request (`POST` / `DELETE`) whose `Origin` header is
+present but untrusted is rejected 403 *before* every other gate.
+
+Behind a reverse proxy the browser's `Origin` is your **external**
+origin — `https://webui.example.com` — not the webui's own
+`http://127.0.0.1:8080`. The webui only trusts its own serving origins
+(loopback + LAN address while LAN sharing is on) plus an explicit
+allowlist, so **you must register the external origin** or the SPA's
+own authenticated `POST`s will 403 and cross-origin reads will fail:
+
+```bash
+# one-time, against the local webui (adjust scheme/host/port):
+curl -X POST http://127.0.0.1:8080/api/settings \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer <your-token>" \
+  -d '{"trustedOrigins": ["https://webui.example.com"]}'
+```
+
+Rules (fail-closed, whole batch): `http`/`https` origin serialization
+only (`scheme://host[:port]`, no path/query/userinfo), at most 16
+entries of 1..200 chars; an invalid batch is rejected 400 unchanged.
+The list is persisted in `~/.mcode-webui/settings.json` and returned by
+`GET /api/settings`. Details:
+[SECURITY-NOTES — CORS](../references/SECURITY-NOTES.md#cors--cross-origin-resource-sharing).
+
+Proxy checklist for origins:
+
+- **Forward the `Origin` header untouched.** nginx / caddy / Traefik
+  all pass it through by default — do NOT strip it, and do NOT rewrite
+  it to something else (the webui reflects and gates on the verbatim
+  value).
+- **Use the exact browser-visible origin**, scheme + host + port. If
+  you serve the SPA on `https://webui.example.com` (default port),
+  the entry is `https://webui.example.com` — no trailing slash, no
+  path. An `http://` origin behind an `https://` page will never be
+  sent by the browser, so don't list it.
+- The webui sends `Vary: Origin` on every response; proxies must not
+  strip `Vary` either, or a cached CORS response could be reused for a
+  different origin.
+- Programmatic clients that send no `Origin` (curl, MCP, CLI) are
+  unaffected by the gate — they keep working through the proxy as
+  before.
+
 ## 3. Common pitfalls — Server-Sent Events (SSE)
 
 SSE long connections (`/api/events`, `/api/alerts`) are the #1 source of "my proxy works for everything except the live feed" bug reports. The trap is buffering: reverse proxies default to **buffering upstream responses** to send them in one TCP write, which kills any stream that depends on incremental flushing.
@@ -66,8 +114,11 @@ Tested against nginx 1.24.x. Replace every `example.com`, `/path/to/`, and `127.
 
 ```nginx
 # /etc/nginx/sites-available/mcode-webui.conf
-# Upstream: the webui binds 0.0.0.0:8080 by default; tune HOST / PORT
-# env vars on the webui process to change this.
+# Upstream: the webui binds 127.0.0.1:8080 by default (v2 loopback
+# default) — ideal for a same-host proxy. If the proxy runs on another
+# host, widen the bind explicitly on the webui process (HOST=0.0.0.0
+# env, or POST /api/settings {lanBind: true}). Remember to register
+# the external origin in trustedOrigins — see §2.1.
 upstream mcode_webui_upstream {
     server 127.0.0.1:8080;
     keepalive 32;
@@ -365,12 +416,30 @@ curl -i -H "Authorization: Bearer <your-token>" "https://${HOST}/api/state" | he
 timeout 5 curl -N -H "Authorization: Bearer <your-token>" \
     "https://${HOST}/api/events"
 # Expect: data: {...} lines arriving at near-realtime cadence.
+
+# 5. Browser-origin gate (v2) — with the external origin registered in
+#    trustedOrigins (§2.1), the preflight is answered and the origin is
+#    reflected verbatim (never a wildcard):
+curl -s -i -X OPTIONS "https://${HOST}/api/state" \
+    -H "Origin: https://${HOST}" \
+    -H "Access-Control-Request-Method: POST" | grep -i access-control
+# Expect: Access-Control-Allow-Origin: https://webui.example.com
+#         Access-Control-Allow-Methods: GET, POST, OPTIONS, DELETE
+
+# 6. Browser-origin gate (v2) — an UNregistered origin gets no CORS
+#    headers on reads and a 403 on mutating requests:
+curl -s -i -X POST "https://${HOST}/api/settings" \
+    -H "Origin: https://evil.example" \
+    -H 'Content-Type: application/json' -d '{}' | head -1
+# Expect: HTTP/2 403  {"ok":false,"error":"cross-origin request rejected"}
 ```
 
 ## 8. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| Browser `POST`/`DELETE` returns 403 `cross-origin request rejected` | v2 Origin/CSRF gate: the external origin is not in `trustedOrigins` | `POST /api/settings {"trustedOrigins": ["https://webui.example.com"]}` — exact browser-visible origin, no trailing slash (§2.1). Check the proxy isn't rewriting/stripping the `Origin` header |
+| Browser can't read API responses (CORS errors in console) but curl works | External origin not allowlisted — untrusted origins get zero `Access-Control-*` headers by design | Same fix: register the origin in `trustedOrigins` (§2.1) |
 | `curl` returns 301 to HTTPS but the browser shows cert error | You're testing the redirect, not the TLS handshake | Test directly: `curl -v https://webui.example.com/api/health` |
 | SSE events arrive in bursts every 30s | Proxy is buffering | See §3 — set `proxy_buffering off` (nginx) / add the `buffering` plugin (Traefik 2.4) / check Caddy version |
 | SSE disconnects after a few minutes | Proxy idle timeout | Bump `proxy_read_timeout` / `read_timeout` / `forwardingTimeouts.idleConnTimeout` to 1h |

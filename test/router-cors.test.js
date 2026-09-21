@@ -35,7 +35,7 @@ function wouldGate3Reject({ method, hasSuppliedToken }) {
   return true;                                   // otherwise → 401
 }
 
-describe("router — CORS headers (v1.0.1)", () => {
+describe("router — CORS headers (v2 trusted-origin policy, PR #55 review point 1)", () => {
   test("L281: Allow-Headers includes Authorization (reviewer-required fix)", () => {
     assert.match(
       routerSource,
@@ -44,11 +44,32 @@ describe("router — CORS headers (v1.0.1)", () => {
     );
   });
 
-  test("L279: Allow-Origin remains wildcard", () => {
-    assert.match(
+  test("no wildcard Allow-Origin anywhere (v2: wildcard × local-bypass hole is closed)", () => {
+    assert.doesNotMatch(
       routerSource,
       /Access-Control-Allow-Origin['"]\s*,\s*['"]\*/,
-      "router.js should keep Allow-Origin: * (LAN deployment, no credentials)"
+      "router.js must NOT send Access-Control-Allow-Origin: * — combined with the local-request token bypass any web page could read API responses by targeting 127.0.0.1 (PR #55 review point 1)"
+    );
+  });
+
+  test("Allow-Origin is reflected from the request Origin, gated on trust", () => {
+    assert.match(
+      routerSource,
+      /originTrusted[\s\S]*?setHeader\(['"]Access-Control-Allow-Origin['"],\s*originHeader\)/,
+      "CORS Allow-Origin must reflect the (normalized) request Origin verbatim and only inside the trusted branch"
+    );
+    assert.match(
+      routerSource,
+      /const originTrusted = originHeader !== ['"]['"] && trustedOrigins\.has\(originHeader\);/,
+      "trust decision must be set membership of the normalized Origin header"
+    );
+  });
+
+  test("responses key caches on Origin (Vary: Origin)", () => {
+    assert.match(
+      routerSource,
+      /setHeader\(['"]Vary['"],\s*['"]Origin['"]\)/,
+      "responses must carry Vary: Origin — the CORS surface varies by request Origin whether or not ACAO is reflected"
     );
   });
 
@@ -57,6 +78,35 @@ describe("router — CORS headers (v1.0.1)", () => {
       routerSource,
       /Access-Control-Allow-Methods['"]\s*,\s*['"]GET, POST, OPTIONS, DELETE/,
       "router.js L280 should list GET, POST, OPTIONS, DELETE (no PUT/PATCH — none in route table)"
+    );
+  });
+});
+
+describe("router — Gate 1b Origin/CSRF gate (v2, PR #55 review point 1)", () => {
+  test("mutating request with untrusted Origin is 403'd before other gates", () => {
+    // The gate must fire on method alone (not path), BEFORE the LAN /
+    // token / read-only gates, and must NOT be exempted by locality.
+    assert.match(
+      routerSource,
+      /originHeader !== ['"]['"] &&\s*\n?\s*!originTrusted &&/,
+      "Gate 1b must reject any mutating request whose Origin is present but untrusted"
+    );
+    // The gate block sits before Gate 2 (LAN reject).
+    const gate1b = routerSource.indexOf("Gate 1b:");
+    const gate2 = routerSource.indexOf("// Gate 2:");
+    assert.ok(gate1b >= 0, "Gate 1b comment not found in router.js");
+    assert.ok(gate2 > gate1b, "Gate 1b must run before Gate 2 (LAN reject)");
+    // Slice only the gate block itself (up to the first statement after
+    // it) — the later `local = isLocalRequest(req)` line belongs to the
+    // gates that legitimately consult locality.
+    const gateEnd = routerSource.indexOf("const pathname", gate1b);
+    assert.ok(gateEnd > gate1b, "Gate 1b block boundary not found");
+    const block = routerSource.slice(gate1b, gateEnd);
+    assert.match(block, /cross-origin request rejected/, "Gate 1b answers 403 with a JSON error body");
+    assert.doesNotMatch(
+      block,
+      /isLocalRequest/,
+      "Gate 1b must not consult socket locality — the loopback token bypass must never double as a browser cross-origin exemption"
     );
   });
 });

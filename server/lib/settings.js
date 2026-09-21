@@ -16,7 +16,7 @@ import { join, dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 
 import { PORT, HOST } from "./config.js";
-import { LAN_IP } from "./lan.js";
+import { LAN_IP, isLoopbackHost } from "./lan.js";
 import { MCODE_CMD, DEFAULT_WORKSPACE, DEFAULT_MODEL } from "./config.js";
 
 // B01: append-only event stream + sha256 chain. Every setter below
@@ -51,6 +51,18 @@ function defaultState() {
     currentToken: "",         // 启动时 init() 决定
     tokenRotatedAt: 0,
     tokenAcknowledged: false,
+    // v2 security fix (PR #55 review point 2): persisted opt-in for the
+    // LAN bind. Default false → config.js resolves the boot bind to
+    // loopback 127.0.0.1. true → next boot binds 0.0.0.0 (env HOST still
+    // wins when set). The socket bind is boot-time state; flipping this
+    // at runtime takes effect after restart (disclosed via
+    // bindRestartPending in the snapshot).
+    lanBind: false,
+    // v2 security fix (PR #55 review point 1): explicit cross-origin
+    // allowlist reflected by the CORS gate in router.js. Empty default —
+    // only origins the server itself serves plus these entries are
+    // ever trusted. Sanitized at write time (sanitizeTrustedOrigins).
+    trustedOrigins: [],
     // v2026-08-28 modacker: Token Plan API key (Subscription Key from
     // platform.minimaxi.com) — when `quotaEnabled=true` AND a key is
     // set, webui's "套餐用量" feature becomes visible and calls the
@@ -70,6 +82,8 @@ let tokenAuthEnabled = true;
 let currentToken = "";
 let tokenRotatedAt = 0;
 let tokenAcknowledged = false;
+let lanBindEnabled = false;
+let trustedOriginsList = [];
 let quotaEnabled = false;
 let tokenPlanApiKey = "";
 
@@ -207,6 +221,8 @@ export function buildPersistBody() {
     currentToken: currentToken,
     tokenRotatedAt: tokenRotatedAt,
     tokenAcknowledged: tokenAcknowledged,
+    lanBind: lanBindEnabled,
+    trustedOrigins: trustedOriginsList,
     quotaEnabled: quotaEnabled,
     tokenPlanApiKey: tokenPlanApiKey,
   };
@@ -250,6 +266,13 @@ export function init(opts = {}) {
     if (typeof onDisk.currentToken === "string") currentToken = onDisk.currentToken;
     if (typeof onDisk.tokenRotatedAt === "number") tokenRotatedAt = onDisk.tokenRotatedAt;
     if (typeof onDisk.tokenAcknowledged === "boolean") tokenAcknowledged = onDisk.tokenAcknowledged;
+    if (typeof onDisk.lanBind === "boolean") lanBindEnabled = onDisk.lanBind;
+    if (Array.isArray(onDisk.trustedOrigins)) {
+      const s = sanitizeTrustedOrigins(onDisk.trustedOrigins);
+      // On-disk garbage (hand-edited file): keep only the valid prefix —
+      // never let a corrupt allowlist widen the CORS trust surface.
+      trustedOriginsList = s.ok ? s.value : [];
+    }
     if (typeof onDisk.quotaEnabled === "boolean") quotaEnabled = onDisk.quotaEnabled;
     if (typeof onDisk.tokenPlanApiKey === "string") tokenPlanApiKey = onDisk.tokenPlanApiKey;
   } else {
@@ -260,6 +283,8 @@ export function init(opts = {}) {
     tokenAcknowledged = d.tokenAcknowledged;
     currentToken = "";
     tokenRotatedAt = 0;
+    lanBindEnabled = d.lanBind;
+    trustedOriginsList = [...d.trustedOrigins];
   }
 
   // Token resolution priority:
@@ -351,6 +376,18 @@ export function getTokenRotatedAt() {
 
 export function getTokenAcknowledged() {
   return tokenAcknowledged;
+}
+
+// v2 security fix (PR #55 review point 2): persisted LAN-bind opt-in.
+export function getLanBind() {
+  return lanBindEnabled;
+}
+
+// v2 security fix (PR #55 review point 1): explicit trusted-origin
+// allowlist for the CORS gate. Returns a copy — callers must not mutate
+// the module's list.
+export function getTrustedOrigins() {
+  return [...trustedOriginsList];
 }
 
 // v2026-08-28 modacker: Token Plan (套餐用量) feature gates.
@@ -592,6 +629,91 @@ export function setTokenAcknowledged(v) {
   }
 }
 
+// -----------------------------------------------------------------------
+// v2 security fix (PR #55 review points 1+2): lanBind + trustedOrigins.
+// -----------------------------------------------------------------------
+
+// Validate + normalize a candidate trustedOrigins array. Origin
+// serialization only: scheme://host[:port], no path/query/userinfo —
+// anything else fails the whole batch (fail-closed; the caller answers
+// 400). Capped at 16 entries × 200 chars so a hostile POST can't bloat
+// settings.json or the per-request trust-set build.
+export function sanitizeTrustedOrigins(arr) {
+  if (!Array.isArray(arr)) {
+    return { ok: false, error: "trustedOrigins must be an array of strings" };
+  }
+  if (arr.length > 16) {
+    return { ok: false, error: "trustedOrigins accepts at most 16 entries" };
+  }
+  const seen = new Set();
+  const out = [];
+  for (const raw of arr) {
+    if (typeof raw !== "string") {
+      return { ok: false, error: "trustedOrigins entries must be strings" };
+    }
+    const v = raw.trim().toLowerCase();
+    if (v.length === 0 || v.length > 200) {
+      return { ok: false, error: "trustedOrigins entry length must be 1..200" };
+    }
+    // http(s) origin only: host charset letters/digits/dot/dash plus
+    // [ ]: for IPv6 literals and the optional port. No '/', '?', '#',
+    // '@' — those widen matching or smuggle userinfo.
+    if (!/^https?:\/\/[a-z0-9.\-\[\]]+(:\d{1,5})?$/.test(v)) {
+      return { ok: false, error: `invalid origin: ${raw.slice(0, 60)}` };
+    }
+    if (!seen.has(v)) {
+      seen.add(v);
+      out.push(v);
+    }
+  }
+  return { ok: true, value: out };
+}
+
+export function setLanBind(v) {
+  const before = lanBindEnabled;
+  const after = !!v;
+  if (before !== after) {
+    _eventsAppend("settings.update.intent", {
+      target: "lanBind",
+      actor: "user",
+      payload: { old: before, new: after },
+    });
+  }
+  lanBindEnabled = after;
+  try { persistNow(); } catch {}
+  console.log(
+    `[webui] LAN bind ${lanBindEnabled ? "enabled (binds 0.0.0.0 after restart)" : "disabled (binds loopback after restart)"}`,
+  );
+  if (before !== after) {
+    _eventsAppend("settings.update", {
+      target: "lanBind",
+      actor: "user",
+      payload: { old: before, new: after },
+    });
+  }
+}
+
+export function setTrustedOrigins(v) {
+  const before = trustedOriginsList;
+  const after = Array.isArray(v) ? [...v] : [];
+  if (before.length !== after.length || before.some((o, i) => o !== after[i])) {
+    _eventsAppend("settings.update.intent", {
+      target: "trustedOrigins",
+      actor: "user",
+      payload: { old_count: before.length, new_count: after.length },
+    });
+  }
+  trustedOriginsList = after;
+  try { persistNow(); } catch {}
+  if (before.length !== after.length || before.some((o, i) => o !== after[i])) {
+    _eventsAppend("settings.update", {
+      target: "trustedOrigins",
+      actor: "user",
+      payload: { old_count: before.length, new_count: trustedOriginsList.length },
+    });
+  }
+}
+
 export function setAllowedInterfaces(_ifaces) {
   // Removed in v1.0.1 cleanup (per #16 reviewer scope). No-op stub.
 }
@@ -828,16 +950,38 @@ export function getSettingsSnapshot(availableInterfaces = null) {
   // it yet. After acknowledgment we omit the value to reduce the
   // window in which it lives in memory + over the wire.
   const includeToken = !tokenAcknowledged;
-  // v1.0.1: include the full LAN URL (with token) for the top-bar chip
-  // — when the user clicks it, they get a shareable URL that other
-  // devices can actually use. Bare `lanUrl` (no token) stays in the
-  // response for display purposes (the top-bar chip only shows the
-  // host:port, not the query string).
+  // v2 security fix (PR #55 review point 1): lanUrlWithToken is a
+  // first-run bootstrap surface ONLY. It used to be returned on every
+  // GET /api/settings for the top-bar share chip — a long-lived
+  // token-bearing URL re-leaked on each poll, exactly what the review
+  // condemns. After acknowledgment the field is omitted entirely; the
+  // UI falls back to the bare `lanUrl` (frontend:
+  // d.lanUrlWithToken || d.lanUrl). A fresh token-bearing URL can be
+  // minted again only via token rotation (resetToken), which returns
+  // the new token exactly once and resets tokenAcknowledged.
   const baseUrl = `http://${LAN_IP}:${PORT}`;
   const shareToken = _effectiveShareToken();
   const lanUrlWithToken = shareToken
     ? `${baseUrl}/?token=${encodeURIComponent(shareToken)}`
     : baseUrl;
+  // v2 security fix (PR #55 review point 2): bind disclosure. `host`
+  // below stays the actual boot-time bind (imported from config.js);
+  // the fields here recompute what the NEXT boot would resolve to from
+  // current state, mirroring config.js#resolveBindHost, so the settings
+  // response always discloses the real exposure surface:
+  //   - lanExposed: the effective bind is not loopback
+  //   - bindRestartPending: the setting no longer matches the live
+  //     socket (takes effect after restart); never claimed when env
+  //     HOST owns the bind
+  const envHost = (process.env.HOST || "").trim();
+  const bindHost = envHost || (lanBindEnabled ? "0.0.0.0" : "127.0.0.1");
+  const lanExposed = !isLoopbackHost(bindHost);
+  const bindRestartPending = !envHost && bindHost !== HOST;
+  const lanExposureNotice = lanExposed
+    ? `LAN exposure ON: webui binds ${bindHost}:${PORT} and is reachable from the network. / 局域网暴露已开启：webui 监听 ${bindHost}:${PORT}，网络内设备均可访问。`
+    : bindRestartPending
+      ? `Bind change pending restart: next boot binds ${bindHost}. / 绑定变更待重启：下次启动监听 ${bindHost}。`
+      : "";
   return {
     ok: true,
     lanBroadcast: lanBroadcastEnabled,
@@ -870,8 +1014,18 @@ export function getSettingsSnapshot(availableInterfaces = null) {
     host: HOST,
     lanIp: LAN_IP,
     lanUrl: baseUrl,
-    lanUrlWithToken,
+    // v2 security fix (PR #55 review point 1): only present while
+    // !tokenAcknowledged (first-run bootstrap). Omitted after ack.
+    ...(includeToken ? { lanUrlWithToken } : {}),
     localUrl: `http://127.0.0.1:${PORT}`,
+    // v2 security fix (PR #55 review point 2): explicit exposure
+    // disclosure surfaced whenever LAN sharing is (or is about to be)
+    // in effect.
+    lanBind: lanBindEnabled,
+    bindHost,
+    lanExposed,
+    bindRestartPending,
+    lanExposureNotice,
     mcodeCmd: MCODE_CMD,
     mcodeVersion: "0.1.2",
     defaultWorkspace: DEFAULT_WORKSPACE,

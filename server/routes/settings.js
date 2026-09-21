@@ -8,19 +8,24 @@
 
 import {
   getLanBroadcast,
+  getLanBind,
   getReadOnly,
   getSettingsSnapshot,
   getTokenAcknowledged,
   getTokenEnabled,
   getTokenRotatedAt,
+  getTrustedOrigins,
   getQuotaEnabled,
   rotateToken,
+  sanitizeTrustedOrigins,
   setLanBroadcast,
+  setLanBind,
   setQuotaEnabled,
   setReadOnly,
   setTokenAcknowledged,
   setTokenEnabled,
   setTokenPlanApiKey,
+  setTrustedOrigins,
 } from "../lib/settings.js";
 import { setTokenAuthEnabled } from "../lib/auth.js";
 import { broadcastTokenRotated, pushStateFor } from "../lib/state-bus.js";
@@ -96,6 +101,44 @@ export async function handlePostSettings(req, res, ctx) {
     );
     if (stop === null) return undefined;
     changed = true;
+  }
+
+  // v2 security fix (PR #55 review point 2): lanBind — persisted opt-in
+  //   for binding 0.0.0.0. Takes effect on the next boot (socket binds
+  //   are boot-time state); the response snapshot discloses this via
+  //   bindRestartPending + lanExposureNotice.
+  if (
+    typeof payload.lanBind === "boolean" &&
+    payload.lanBind !== getLanBind()
+  ) {
+    const stop = _guard("settings.update.lanBind", () =>
+      setLanBind(payload.lanBind),
+    );
+    if (stop === null) return undefined;
+    changed = true;
+  }
+
+  // v2 security fix (PR #55 review point 1): trustedOrigins — explicit
+  //   cross-origin allowlist for the CORS gate. Invalid batches are
+  //   rejected 400 BEFORE any state changes (fail-closed: a malformed
+  //   allowlist must never partially widen the trust surface).
+  if (Array.isArray(payload.trustedOrigins)) {
+    const next = sanitizeTrustedOrigins(payload.trustedOrigins);
+    if (!next.ok) {
+      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+      return res.end(JSON.stringify({ ok: false, error: next.error }));
+    }
+    const current = getTrustedOrigins();
+    const same =
+      current.length === next.value.length &&
+      current.every((o, i) => o === next.value[i]);
+    if (!same) {
+      const stop = _guard("settings.update.trustedOrigins", () =>
+        setTrustedOrigins(next.value),
+      );
+      if (stop === null) return undefined;
+      changed = true;
+    }
   }
 
   // readOnly

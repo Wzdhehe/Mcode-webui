@@ -262,6 +262,84 @@ export const MCODE_SESSION_DELETE_TABLES = [
   "local_runtime_query_view_states",
 ];
 
+// PR#55 review pt 4 (2026-09-21): per-table error CLASSIFICATION.
+// The old code caught every per-table error as if the table were merely
+// absent and still returned ok:true — a lock conflict, a prepare/run
+// failure, a schema anomaly, or an IO error was indistinguishable from
+// "mcode version without this table", so real failures reported success.
+// Only a CONFIRMED missing table is skippable now; everything else
+// rethrows so better-sqlite3 rolls the transaction back and the caller
+// gets {ok:false} with a classified reason.
+function _sqliteErrorMessage(e) {
+  return e && e.message ? String(e.message) : "";
+}
+
+// Confirmed missing table = (a) the error text is SQLite's
+// "no such table" shape AND (b) the schema catalog read on THIS
+// connection agrees the table truly does not exist. A "no such table"
+// message while sqlite_schema still lists the table (torn state,
+// shadow-table weirdness) is NOT confirmed → surfaces as a real error.
+function _isConfirmedMissingTable(db, table, e) {
+  if (!/^no such table:\s*\S+/i.test(_sqliteErrorMessage(e))) return false;
+  try {
+    const row = db
+      .prepare(
+        "SELECT COUNT(*) AS c FROM sqlite_schema WHERE type = 'table' AND name = ?",
+      )
+      .get(table);
+    return !!row && row.c === 0;
+  } catch {
+    return false; // catalog unreadable → cannot confirm → real error
+  }
+}
+
+// Confirmed unsupported schema = the error is SQLite's "no such column"
+// shape naming the exact column our DELETE/SELECT filters on
+// (session_id), AND table_info() agrees the table exists but lacks
+// that column. The delete list is curated for session_id-keyed tables,
+// so a present-but-keyless table means this mcode version's schema is
+// not one we know how to delete from — reported as
+// {ok:false, reason:"unsupported_schema"}, never as success.
+function _isConfirmedUnsupportedSchema(db, table, e) {
+  const m = /^no such column:\s*(\S+)/i.exec(_sqliteErrorMessage(e));
+  if (!m) return false;
+  const col = m[1].split(".").pop(); // strip db.table.col qualification
+  if (col !== "session_id") return false;
+  try {
+    const rows = db.pragma(`table_info(${table})`);
+    return (
+      Array.isArray(rows) &&
+      rows.length > 0 &&
+      rows.every((r) => !r || r.name !== "session_id")
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Shared per-table classifier for the dry-run (COUNT) and real-delete
+// (DELETE) loops. Verdicts: "absent" (confirmed missing table — benign
+// skip), "unsupported_schema" (confirmed keyless table — labelled
+// abort), "error" (lock / prepare / run / IO / anything else — abort).
+function _classifyTableError(db, table, e) {
+  if (_isConfirmedMissingTable(db, table, e)) return "absent";
+  if (_isConfirmedUnsupportedSchema(db, table, e)) return "unsupported_schema";
+  return "error";
+}
+
+// Tagged error for the unsupported-schema verdict. The outer catch
+// reads .unsupportedSchema/.table to shape the failure return without
+// string-matching the message again.
+function _schemaError(table, e) {
+  const err = new Error(
+    `unsupported schema: table ${table} exists without a session_id column`,
+  );
+  if (e && e.code) err.code = e.code;
+  err.table = table;
+  err.unsupportedSchema = true;
+  return err;
+}
+
 export function deleteMcodeSessionFromDb(
   sid,
   { MCODE_RUNTIME_DB, dryRun = false } = {},
@@ -292,8 +370,15 @@ export function deleteMcodeSessionFromDb(
             .prepare(`SELECT COUNT(*) AS c FROM ${t} WHERE session_id = ?`)
             .get(sid);
           if (r && r.c > 0) log.push(`${t}:${r.c}`);
-        } catch {
-          // 表可能不存在 (mcode 不同版本 schema 略不同), 跳过
+        } catch (e) {
+          // PR#55 review pt 4: skip ONLY a confirmed missing table
+          // (mcode versions differ in schema — absence is benign).
+          // Lock/prepare/run/schema/IO errors rethrow → the outer
+          // catch reports {ok:false}; a preview must not fake success
+          // by silently undercounting either.
+          const verdict = _classifyTableError(db, t, e);
+          if (verdict === "absent") continue;
+          throw verdict === "unsupported_schema" ? _schemaError(t, e) : e;
         }
       }
       db.close();
@@ -344,6 +429,11 @@ export function deleteMcodeSessionFromDb(
     db = new Db(MCODE_RUNTIME_DB, { readonly: false });
     db.pragma("busy_timeout = 5000"); // mcode 端可能在写, 最多等 5s
     const log = [];
+    const tablesAbsent = [];
+    // PR#55 review pt 4: the delete runs as ONE explicit transaction —
+    // any non-absent per-table error throws out of the tx body so
+    // better-sqlite3 issues ROLLBACK (partial deletes never commit)
+    // and the outer catch shapes a classified failure return.
     const tx = db.transaction((sid) => {
       for (const t of MCODE_SESSION_DELETE_TABLES) {
         try {
@@ -352,7 +442,17 @@ export function deleteMcodeSessionFromDb(
             .run(sid);
           if (r.changes > 0) log.push(`${t}:${r.changes}`);
         } catch (e) {
-          // 表可能不存在 (mcode 不同版本 schema 略不同), 跳过
+          // Skip ONLY a confirmed missing table (already-absent signal).
+          // Lock conflicts (SQLITE_BUSY/LOCKED), prepare/run failures,
+          // schema anomalies, IO errors — all rethrow → rollback →
+          // {ok:false}. The old code swallowed every per-table error
+          // here and still returned ok:true: fake success on failure.
+          const verdict = _classifyTableError(db, t, e);
+          if (verdict === "absent") {
+            tablesAbsent.push(t);
+            continue;
+          }
+          throw verdict === "unsupported_schema" ? _schemaError(t, e) : e;
         }
       }
     });
@@ -366,6 +466,15 @@ export function deleteMcodeSessionFromDb(
     // Fail-closed: if the OUTCOME write fails we still report
     // {ok:false, reason:"audit_write_failed"} — the rows are gone but
     // the operator must see the audit gap, never a clean ok:true.
+    const totalRowsDeleted = log.reduce(
+      (s, e) => s + Number((e.split(":")[1] || "0")),
+      0,
+    );
+    // PR#55 review pt 4: explicit outcome enumeration. Success is
+    // "deleted" (rows removed) or "already_absent" (transaction
+    // committed, nothing matched — whether the tables were absent or
+    // simply held no rows for this sid). Anything else is {ok:false}.
+    const outcome = totalRowsDeleted > 0 ? "deleted" : "already_absent";
     try {
       _eventsAppend("session.delete", {
         target: sid,
@@ -373,22 +482,44 @@ export function deleteMcodeSessionFromDb(
         payload: {
           matchKind: "db",
           dryRun: false,
+          outcome,
           tablesAffected: log.length,
-          totalRowsDeleted: log.reduce(
-            (s, e) => s + Number((e.split(":")[1] || "0")),
-            0,
-          ),
+          tablesAbsent: tablesAbsent.length,
+          totalRowsDeleted,
         },
       });
     } catch (e) {
       return { ok: false, reason: "audit_write_failed", error: e.message };
     }
-    return { ok: true, log };
+    return {
+      ok: true,
+      outcome,
+      log,
+      totalRowsDeleted,
+      tablesAbsent: tablesAbsent.length,
+    };
   } catch (e) {
     if (db)
       try {
         db.close();
       } catch {}
-    return { ok: false, error: e.message };
+    // tx body threw → better-sqlite3 already issued ROLLBACK (no
+    // partial delete commits). Surface a classified failure — the old
+    // code could not reach this branch for per-table errors at all,
+    // which is exactly the fake-success bug PR#55 review pt 4 names.
+    if (e && e.unsupportedSchema) {
+      return {
+        ok: false,
+        reason: "unsupported_schema",
+        table: e.table,
+        error: e.message,
+      };
+    }
+    return {
+      ok: false,
+      reason: "db_error",
+      error: e && e.message ? e.message : String(e),
+      code: e && e.code ? e.code : undefined,
+    };
   }
 }

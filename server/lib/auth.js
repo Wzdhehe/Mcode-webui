@@ -16,6 +16,15 @@
 //   - Static files (HTML/CSS/JS/images) and OPTIONS preflight are always
 //     public so the SPA can bootstrap; only `/api/*` and SSE are gated.
 //
+// v2 security note (PR #55 review point 1): the local bypass below is a
+// SOCKET-identity fact (the connection originated on this machine), not
+// a browser-origin fact. It must never double as a cross-origin
+// exemption: a page on evil.com targeting http://127.0.0.1:<port> also
+// arrives over a loopback socket. The browser boundary is enforced
+// separately and EARLIER by router.js Gate 1b (mutating requests with
+// an untrusted Origin header are 403'd before this module runs, local
+// or not) plus Gate 1's trusted-origin-only CORS reflection.
+//
 // Token resolution priority on each request:
 //   1. process.env.TOKEN (env wins, always — deploys / docker)
 //   2. In-memory `expectedToken` (synced from settings.js after rotation)
