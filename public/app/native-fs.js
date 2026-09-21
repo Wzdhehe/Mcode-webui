@@ -7,7 +7,7 @@
 // 主入口：打开目录选择对话框。
 // 返回 Promise<{ ok: true, dir: string } | { ok: false, reason: 'cancel' | 'error', error?: string }>
 
-import { directoryOpen } from '/node_modules/browser-fs-access/dist/index.modern.js'
+import { directoryOpen } from '/libs/browser-fs-access/index.modern.js'
 
 /**
  * 检测当前是否在 Electron 桌面环境中运行
